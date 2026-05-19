@@ -1,7 +1,7 @@
 import { Command } from '../utils/CommandManager'
 import { useModelStore } from '../store/modelStore'
-import { useRendererStore } from '../store/rendererStore'
 import { modelDocumentCommandHandler } from '../application/commands'
+import { syncRendererGeosetBuffers } from '../application/render'
 
 interface VertexBindChange {
     geosetIndex: number
@@ -9,6 +9,8 @@ interface VertexBindChange {
     oldGroup: number[]
     newGroup: number[]
 }
+
+const UNBOUND_BONE_SENTINEL = 65535
 
 const toGroup = (group: any): number[] => {
     if (!Array.isArray(group)) return []
@@ -42,19 +44,22 @@ const normalizeGeosetSkinning = (geoset: any) => {
     const rawGroups = toGroupsMatrix(geoset?.Groups)
     const rawVertexGroup = geoset?.VertexGroup
         ? Array.from(geoset.VertexGroup as ArrayLike<number>, (value) => Number(value) || 0)
-        : new Array(vertexCount).fill(0)
+        : new Array(vertexCount).fill(UNBOUND_BONE_SENTINEL)
 
     const nextVertexGroupValues = new Array(vertexCount)
     for (let i = 0; i < vertexCount; i++) {
-        nextVertexGroupValues[i] = Math.max(0, Math.floor(rawVertexGroup[i] ?? 0))
-    }
-
-    if (rawGroups.length === 0) {
-        rawGroups.push([0])
+        const value = Number(rawVertexGroup[i])
+        nextVertexGroupValues[i] = Number.isFinite(value)
+            ? Math.max(0, Math.floor(value))
+            : UNBOUND_BONE_SENTINEL
     }
 
     const used = new Set<number>()
-    nextVertexGroupValues.forEach((value) => used.add(value))
+    nextVertexGroupValues.forEach((value) => {
+        if (value !== UNBOUND_BONE_SENTINEL) {
+            used.add(value)
+        }
+    })
 
     const sorted = Array.from(used.values()).sort((a, b) => a - b)
     const remap = new Map<number, number>()
@@ -70,12 +75,16 @@ const normalizeGeosetSkinning = (geoset: any) => {
 
     const maxGroupIndex = Math.max(0, compactedGroups.length - 1)
     const compactedVertexGroupValues = nextVertexGroupValues.map((value) => {
+        if (value === UNBOUND_BONE_SENTINEL) return UNBOUND_BONE_SENTINEL
         const remapped = remap.get(value)
-        if (remapped === undefined) return 0
+        if (remapped === undefined) return UNBOUND_BONE_SENTINEL
         return Math.min(Math.max(0, remapped), maxGroupIndex)
     })
 
-    const TypedArrayCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array
+    const requiresWideVertexGroup =
+        compactedGroups.length >= 256
+        || compactedVertexGroupValues.some((value) => value === UNBOUND_BONE_SENTINEL || value > 255)
+    const TypedArrayCtor = maxGroupIndex > 255 || requiresWideVertexGroup ? Uint16Array : Uint8Array
     geoset.Groups = compactedGroups
     geoset.VertexGroup = new TypedArrayCtor(compactedVertexGroupValues)
     geoset.TotalGroupsCount = compactedGroups.reduce((sum, group) => sum + group.length, 0)
@@ -86,11 +95,15 @@ const groupsEqual = (a: number[], b: number[]): boolean => {
 }
 
 const findOrCreateGroup = (geoset: any, group: number[]): number => {
+    if (group.length === 0) {
+        return UNBOUND_BONE_SENTINEL
+    }
+
     if (!Array.isArray(geoset.Groups)) {
         geoset.Groups = []
     }
 
-    const normalized = group.length > 0 ? [...group] : [0]
+    const normalized = [...group]
     for (let i = 0; i < geoset.Groups.length; i++) {
         if (groupsEqual(toGroup(geoset.Groups[i]), normalized)) {
             return i
@@ -107,8 +120,21 @@ const writeSkinWeightsForVertex = (geoset: any, vertexIndex: number): void => {
     if (base < 0 || base + 7 >= geoset.SkinWeights.length) return
 
     const groupIndex = geoset.VertexGroup[vertexIndex]
+    if (groupIndex === UNBOUND_BONE_SENTINEL) {
+        for (let i = 0; i < 8; i++) {
+            geoset.SkinWeights[base + i] = 0
+        }
+        return
+    }
+
     const group = toGroup(geoset.Groups[groupIndex]).slice(0, 4)
-    const bones = group.length > 0 ? group : [0]
+    const bones = group.length > 0 ? group : []
+    if (bones.length === 0) {
+        for (let i = 0; i < 8; i++) {
+            geoset.SkinWeights[base + i] = 0
+        }
+        return
+    }
     const baseWeight = Math.floor(255 / bones.length)
     let remainder = 255 - baseWeight * bones.length
 
@@ -241,7 +267,7 @@ export class BindVerticesCommand implements Command {
                     Groups: rendererGeoset.Groups.map((group: number[]) => [...group]),
                     TotalGroupsCount: rendererGeoset.TotalGroupsCount,
                     VertexGroup: rendererGeoset.VertexGroup instanceof Uint16Array
-                        ? Array.from(rendererGeoset.VertexGroup)
+                        ? new Uint16Array(rendererGeoset.VertexGroup)
                         : new Uint8Array(rendererGeoset.VertexGroup),
                     ...(rendererGeoset.SkinWeights ? { SkinWeights: new Uint8Array(rendererGeoset.SkinWeights) } : {})
                 } as any
@@ -254,17 +280,8 @@ export class BindVerticesCommand implements Command {
             })
         }
 
-        // Update GPU skinning buffers through the active renderer instance.
-        affectedGeosets.forEach(geosetIndex => {
-            if (typeof this.renderer.updateGeosetGroups === 'function') {
-                this.renderer.updateGeosetGroups(geosetIndex)
-            } else {
-                console.warn('[BindVerticesCommand] renderer.updateGeosetGroups not available')
-            }
-        })
-
         if (affectedGeosets.size > 0) {
-            useRendererStore.getState().bumpVertexRenderRevision()
+            syncRendererGeosetBuffers(this.renderer, affectedGeosets, { groups: true })
         }
 
         // Also force a redraw

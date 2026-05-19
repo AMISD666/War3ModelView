@@ -2,6 +2,7 @@ import { windowGateway, type ManagedWindow, type WindowGateway } from '../../inf
 import { isKeyframeAnimVectorIntTrack, serializeAnimVectorForKeyframeIpc } from '../../utils/animVectorIpc'
 import { markStandalonePerf } from '../diagnostics/StandalonePerf'
 import { chooseRpcEmitEncoding, chooseRpcEmitEncodingInWorker } from '../../utils/rpcSerialization'
+import { KEYFRAME_GLOBAL_SEQUENCES_CHANGED_EVENT } from './KeyframeEvents'
 
 const RPC_INVOKE_EMIT_THRESHOLD_CHARS = 48 * 1024
 
@@ -131,5 +132,9 @@ export class WindowRpcTransport {
             console.warn('[WindowRpcTransport] Keyframe init gateway emit failed repeatedly, falling back to window emit')
             await this.emitToolWindowEvent(windowId, 'IPC_KEYFRAME_INIT', ipcPayload).catch(() => {})
         }
+    }
+
+    async emitKeyframeGlobalSequencesChanged(windowId: string, payload: unknown): Promise<void> {
+        await this.emitToolWindowEvent(windowId, KEYFRAME_GLOBAL_SEQUENCES_CHANGED_EVENT, payload)
     }
 }

@@ -1,4 +1,5 @@
 import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { syncRendererGeosetBuffers } from '../application/render'
 import { modelDocumentCommandHandler } from '../application/commands'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
@@ -98,6 +99,12 @@ export class DeleteFacesCommand implements Command {
             } else {
                 Object.assign(geoset, result.updatedGeoset)
                 addWar3GeosetBuffers(this.renderer.model, geosetIndex)
+                syncRendererGeosetBuffers(this.renderer, [geosetIndex], {
+                    vertices: true,
+                    normals: true,
+                    texCoords: true,
+                    groups: true,
+                })
             }
         }
 
@@ -120,6 +127,12 @@ export class DeleteFacesCommand implements Command {
         this.renderer.model.Geosets = this.originalGeosetsSnapshot.map((geoset) => cloneDeep(geoset))
         this.renderer.model.Geosets.forEach((_geoset: any, index: number) => {
             addWar3GeosetBuffers(this.renderer.model, index)
+            syncRendererGeosetBuffers(this.renderer, [index], {
+                vertices: true,
+                normals: true,
+                texCoords: true,
+                groups: true,
+            })
         })
         if (this.originalGeosetAnimsSnapshot) {
             syncRendererGeosetAnims(this.renderer, this.originalGeosetAnimsSnapshot)

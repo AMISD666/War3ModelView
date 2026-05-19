@@ -184,6 +184,37 @@ export class ToolWindowLifecycleService {
         return visible
     }
 
+    async getVisibleWindowsByPrefix(prefix: string): Promise<ManagedWindow[]> {
+        const trackedWindows = Array.from(this.activeWindows.entries())
+            .filter(([windowId]) => windowId.startsWith(prefix))
+
+        const windowsByLabel = new Map<string, ManagedWindow>(trackedWindows)
+        try {
+            const discoveredWindows = await this.gateway.getAllWindows()
+            discoveredWindows.forEach((win) => {
+                if (win.label.startsWith(prefix)) {
+                    windowsByLabel.set(win.label, win)
+                }
+            })
+        } catch (error) {
+            console.warn(`[ToolWindowLifecycleService] Failed to enumerate ${prefix} windows:`, error)
+        }
+
+        const visibleWindows: ManagedWindow[] = []
+        await Promise.all(Array.from(windowsByLabel.entries()).map(async ([windowId, win]) => {
+            try {
+                const visible = await win.isVisible()
+                this.visibilityCache.set(windowId, visible)
+                if (visible) {
+                    visibleWindows.push(win)
+                }
+            } catch {
+                this.clearToolWindowState(windowId)
+            }
+        }))
+        return visibleWindows
+    }
+
     async destroyAllWindows(): Promise<void> {
         const trackedWindows = Array.from(this.activeWindows.entries())
         this.activeWindows.clear()

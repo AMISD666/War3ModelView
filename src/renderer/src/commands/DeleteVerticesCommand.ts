@@ -3,6 +3,7 @@ import { deleteVertices, DeleteResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { syncRendererGeosetBuffers } from '../application/render'
 import { modelDocumentCommandHandler } from '../application/commands'
 import {
     cloneGeosetAnims,
@@ -97,6 +98,12 @@ export class DeleteVerticesCommand implements Command {
         } else {
             Object.assign(geoset, this.deleteResult.updatedGeoset)
             addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
+            syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], {
+                vertices: true,
+                normals: true,
+                texCoords: true,
+                groups: true,
+            })
             this.removedGeoset = false
         }
 
@@ -122,6 +129,12 @@ export class DeleteVerticesCommand implements Command {
         }
 
         addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
+        syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], {
+            vertices: true,
+            normals: true,
+            texCoords: true,
+            groups: true,
+        })
 
         this.syncToStore()
     }

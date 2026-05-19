@@ -16,6 +16,7 @@ export interface UpdateGeosetAnimsCommandPayload extends GeosetAnimationCommandE
 export type UpdateGeosetAnimsPayloadInput = {
     documentId?: string | null
     documentRevision?: number
+    stalePolicy?: GeosetAnimationStalePolicy
     geosetAnims: unknown[]
 }
 
@@ -26,12 +27,13 @@ export type UpdateGeosetAnimsParseResult =
 export const createUpdateGeosetAnimsPayload = ({
     documentId,
     documentRevision,
+    stalePolicy = 'warn',
     geosetAnims,
 }: UpdateGeosetAnimsPayloadInput): UpdateGeosetAnimsCommandPayload => ({
     action: 'UPDATE_GEOSET_ANIMS',
     documentId: documentId ?? null,
     baseDocumentRevision: documentRevision,
-    stalePolicy: 'reject',
+    stalePolicy,
     payload: { geosetAnims },
 })
 

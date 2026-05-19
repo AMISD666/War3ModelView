@@ -1,4 +1,5 @@
 import type { NodeEditorKind } from '../types/nodeEditorRpc'
+import { useModelStore } from '../store/modelStore'
 import { getToolWindowSize, type ToolWindowId } from '../application/window-bridge/ToolWindowLayouts'
 import {
     ToolWindowHydrationTracker,
@@ -70,12 +71,30 @@ class WindowManager {
 
     async openKeyframeToolWindow(windowId: string, title: string, width: number, height: number, payload: any): Promise<void> {
         const hasExistingWindow = await this.lifecycleService.resolveWindow(windowId) !== null
+        const modelState = useModelStore.getState()
+        const revisionedPayload = {
+            documentId: modelState.documentId,
+            documentRevision: modelState.documentRevision,
+            ...payload,
+        }
         await this.openToolWindow(windowId, title, width, height, {
             waitForHydration: !hasExistingWindow,
             hydrationTimeoutMs: 1000,
             syncMode: 'never',
         })
-        await this.rpcTransport.emitKeyframeInit(windowId, payload)
+        await this.rpcTransport.emitKeyframeInit(windowId, revisionedPayload)
+    }
+
+    async broadcastKeyframeGlobalSequences(payload: unknown): Promise<void> {
+        const keyframeWindows = await this.lifecycleService.getVisibleWindowsByPrefix('keyframeEditor_')
+        const globalSequenceWindow = await this.lifecycleService.resolveWindow('globalSequenceManager')
+        const windows = [...keyframeWindows]
+        if (globalSequenceWindow && await globalSequenceWindow.isVisible().catch(() => false)) {
+            windows.push(globalSequenceWindow)
+        }
+        await Promise.all(
+            windows.map((window) => this.rpcTransport.emitKeyframeGlobalSequencesChanged(window.label, payload)),
+        )
     }
 
     async destroyAllWindows(): Promise<void> {

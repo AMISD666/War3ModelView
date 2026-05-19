@@ -10,6 +10,7 @@ import type {
     RendererSyncError,
     RendererSyncResult,
 } from './RendererSyncTypes'
+import { applyNodeCollections, type RendererNode } from './RendererNodeCollections'
 
 export const syncNodeProjection = (
     input: NodeProjectionRendererSyncInput,
@@ -23,16 +24,15 @@ export const syncNodeProjection = (
     }
 
     const safeNodes = Array.isArray(input.nodes)
-        ? input.nodes.filter((node): node is Record<string, unknown> => !!node && typeof node === 'object' && typeof (node as Record<string, unknown>).ObjectId === 'number')
+        ? input.nodes.filter((node): node is RendererNode => !!node && typeof node === 'object' && typeof (node as Record<string, unknown>).ObjectId === 'number')
         : []
 
     try {
         const rendererModel = input.renderer.model as Record<string, unknown>
-        rendererModel.Nodes = safeNodes
-        rendererModel.Lights = safeNodes.filter((node) => node.type === 'Light')
+        applyNodeCollections(rendererModel, safeNodes)
 
         let invalidWrappers = 0
-        const storeNodeMap = new Map<number, Record<string, unknown>>(safeNodes.map((node) => [node.ObjectId as number, node]))
+        const storeNodeMap = new Map<number, RendererNode>(safeNodes.map((node) => [node.ObjectId as number, node]))
         const wrappers = input.renderer.rendererData?.nodes
         wrappers?.forEach((wrapper) => {
             const wrapperNodeId = wrapper?.node?.ObjectId
@@ -81,7 +81,7 @@ export const syncNodeStructure = (
             : (input.ensureNodes?.(input.renderer.model) ?? input.renderer.model.Nodes ?? [])
 
         const rendererModel = input.renderer.model as Record<string, unknown>
-        rendererModel.Nodes = nextNodes
+        applyNodeCollections(rendererModel, nextNodes as RendererNode[])
         input.renderer.modelInstance.syncNodes?.()
         input.renderer.modelInstance.syncMaterials?.()
         input.renderer.modelInstance.syncGlobalSequences?.()

@@ -179,6 +179,75 @@ export function toTypedVector(
     return result;
 }
 
+function normalizeQuaternionValues(values: ArrayLike<number> | undefined | null): Float32Array {
+    const x = Number(values?.[0] ?? 0)
+    const y = Number(values?.[1] ?? 0)
+    const z = Number(values?.[2] ?? 0)
+    const w = Number(values?.[3] ?? 1)
+    const length = Math.hypot(x, y, z, w)
+    if (!Number.isFinite(length) || length < 1e-8) {
+        return new Float32Array([0, 0, 0, 1])
+    }
+    return new Float32Array([x / length, y / length, z / length, w / length])
+}
+
+function normalizeQuaternionAnimVectorKeys(keys: any[]): any[] {
+    if (keys.length <= 0) return keys
+
+    const normalized = keys.map((key) => {
+        const next = { ...key }
+        next.Vector = normalizeQuaternionValues(key?.Vector)
+        if (key?.InTan !== undefined) {
+            next.InTan = normalizeQuaternionValues(key.InTan)
+        }
+        if (key?.OutTan !== undefined) {
+            next.OutTan = normalizeQuaternionValues(key.OutTan)
+        }
+        return next
+    })
+
+    for (let i = 1; i < normalized.length; i++) {
+        const previous = normalized[i - 1]?.Vector
+        const current = normalized[i]?.Vector
+        if (!previous || !current || previous.length < 4 || current.length < 4) continue
+
+        const dot =
+            previous[0] * current[0] +
+            previous[1] * current[1] +
+            previous[2] * current[2] +
+            previous[3] * current[3]
+
+        if (dot >= 0) continue
+
+        normalized[i].Vector = new Float32Array([
+            -current[0],
+            -current[1],
+            -current[2],
+            -current[3],
+        ])
+
+        if (normalized[i].InTan) {
+            normalized[i].InTan = new Float32Array([
+                -normalized[i].InTan[0],
+                -normalized[i].InTan[1],
+                -normalized[i].InTan[2],
+                -normalized[i].InTan[3],
+            ])
+        }
+
+        if (normalized[i].OutTan) {
+            normalized[i].OutTan = new Float32Array([
+                -normalized[i].OutTan[0],
+                -normalized[i].OutTan[1],
+                -normalized[i].OutTan[2],
+                -normalized[i].OutTan[3],
+            ])
+        }
+    }
+
+    return normalized
+}
+
 export function isAnimVector(val: any): boolean {
     return val && typeof val === 'object' && Array.isArray(val.Keys);
 }
@@ -234,6 +303,9 @@ export function fixAnimVector(
             .filter((key: any, index: number, keys: any[]) =>
                 index === keys.length - 1 || key.Frame !== keys[index + 1].Frame
             );
+        if (!isInt && vectorSize === 4) {
+            animVec.Keys = normalizeQuaternionAnimVectorKeys(animVec.Keys);
+        }
     } else {
         animVec.Keys = [];
     }
@@ -245,8 +317,11 @@ export function fixAnimVector(
     } else if (typeof animVec.GlobalSeqId !== 'number' || !Number.isFinite(animVec.GlobalSeqId)) {
         animVec.GlobalSeqId = null;
     }
-    if (typeof globalSeqCount === 'number' && globalSeqCount > 0 && typeof animVec.GlobalSeqId === 'number') {
-        if (animVec.GlobalSeqId < 0 || animVec.GlobalSeqId >= globalSeqCount) {
+    if (typeof animVec.GlobalSeqId === 'number' && animVec.GlobalSeqId < 0) {
+        animVec.GlobalSeqId = null;
+    }
+    if (typeof globalSeqCount === 'number' && typeof animVec.GlobalSeqId === 'number') {
+        if (globalSeqCount <= 0 || animVec.GlobalSeqId >= globalSeqCount) {
             animVec.GlobalSeqId = null;
         }
     }

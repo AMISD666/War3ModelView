@@ -459,6 +459,7 @@ export const RetargetModelViewport3D: React.FC<RetargetModelViewport3DProps> = (
                     pMatrix,
                     rendererNodes,
                     highlightedIds,
+                    [],
                     parentOfSelected,
                     childrenOfSelected,
                     buildNodeTypeColors(),

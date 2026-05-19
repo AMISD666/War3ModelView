@@ -971,6 +971,10 @@ const TextureEditorModal: React.FC<TextureEditorModalProps> = ({
             if (forwardSlash !== normalized) {
                 renderer.setTextureImageData(forwardSlash, [imageData])
             }
+
+            // Live texture adjustments update pixel content in place, so refresh
+            // material bindings immediately instead of waiting for a later reload.
+            renderer.modelInstance?.syncMaterials?.()
         }
     }
 

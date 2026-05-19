@@ -18,6 +18,37 @@ import { mergeGeosetMetadata } from './ToolWindowSnapshots'
 
 const SOURCE = 'MaterialManagerCommandHandler'
 
+const REVISION_TOLERANT_ACTIONS = new Set([
+    'SAVE_MATERIALS',
+    'PATCH_SELECTED_MATERIAL_PREVIEW',
+    'PATCH_SELECTED_LAYER_PREVIEW',
+    'ADD_LAYER_PREVIEW',
+    'DELETE_LAYER_PREVIEW',
+    'MOVE_LAYER_PREVIEW',
+    'ADD_MATERIAL_PREVIEW',
+    'DELETE_MATERIAL_PREVIEW',
+    'CLEAR_MATERIAL_PREVIEW',
+    'RELOAD_RENDERER',
+    'SET_SELECTION',
+])
+
+const getRevisionCheckPayload = (
+    payload: RevisionedToolCommand | undefined,
+    action: string | undefined,
+): RevisionedToolCommand | undefined => {
+    if (!payload || !action || !REVISION_TOLERANT_ACTIONS.has(action)) {
+        return payload
+    }
+
+    // Preview/selection commands are intentionally document-revision tolerant:
+    // they update the preview overlay, not document truth. Keep documentId
+    // protection active while avoiding noisy stale-revision warnings.
+    return {
+        ...payload,
+        baseDocumentRevision: useModelStore.getState().documentRevision,
+    }
+}
+
 const mergeMaterialPreviewPayload = (
     payload: { geosets?: unknown[]; materialDelete?: { deletedIndex: number; nextMaterialCount: number }; ribbonEmitters?: unknown[] },
 ) => {
@@ -43,7 +74,7 @@ export class MaterialManagerCommandHandler {
         const materialPayload = parseMaterialManagerCommandPayload(payload)
         const actionPayload = materialPayload.ok ? materialPayload.payload : payload as RevisionedToolCommand | undefined
         markCommandReceived(SOURCE, command, actionPayload)
-        if (!checkCommandRevision(SOURCE, actionPayload)) {
+        if (!checkCommandRevision(SOURCE, getRevisionCheckPayload(actionPayload, actionPayload?.action))) {
             previewOverlayService.clearMaterialManagerPreview()
             return
         }

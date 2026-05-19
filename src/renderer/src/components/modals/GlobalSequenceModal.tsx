@@ -3,6 +3,7 @@ import { Button, InputNumber } from 'antd'
 import { PlusOutlined, DeleteOutlined, CheckOutlined } from '@ant-design/icons'
 import { useModelStore } from '../../store/modelStore'
 import { useRpcClient } from '../../hooks/useRpc'
+import { useGlobalSequenceSync } from '../../hooks/useGlobalSequenceSync'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { windowGateway } from '../../infrastructure/window'
 import {
@@ -34,6 +35,11 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
         'globalSequenceManager',
         { documentId: null, documentRevision: 0, globalSequences: [] }
     )
+    const syncedGlobalSequences = useGlobalSequenceSync({
+        documentId: rpcState.documentId,
+        documentRevision: rpcState.documentRevision,
+        globalSequences: rpcState.globalSequences,
+    })
 
     const storeGlobalSequences = useModelStore(state => {
         const rawSequences = ((state.modelData as any)?.GlobalSequences as any[]) || []
@@ -44,7 +50,9 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
             })
             : []
     })
-    const globalSequences: number[] = isStandalone ? (rpcState.globalSequences || []) : storeGlobalSequences
+    const globalSequences: number[] = isStandalone
+        ? (syncedGlobalSequences.globalSequences || rpcState.globalSequences || [])
+        : storeGlobalSequences
 
     const [localSeqs, setLocalSeqs] = useState<number[]>([])
     const lastGlobalSeqSigRef = useRef('')
@@ -70,12 +78,17 @@ const GlobalSequenceModal: React.FC<GlobalSequenceModalProps> = ({
 
         lastCommittedSeqSigRef.current = sig
         setLocalSeqs(normalizedSeqs)
+        syncedGlobalSequences.replaceGlobalSequences(normalizedSeqs)
         if (isStandalone) {
             emitCommand(
                 'EXECUTE_GLOBAL_SEQ_ACTION',
                 createGlobalSequenceSavePayload({
-                    documentId: rpcState.documentId,
-                    documentRevision: rpcState.documentRevision,
+                    documentId: syncedGlobalSequences.documentId !== undefined
+                        ? syncedGlobalSequences.documentId
+                        : rpcState.documentId,
+                    documentRevision: syncedGlobalSequences.documentRevision !== undefined
+                        ? syncedGlobalSequences.documentRevision
+                        : rpcState.documentRevision,
                     durations: normalizedSeqs,
                 }),
             )

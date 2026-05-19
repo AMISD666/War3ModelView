@@ -169,12 +169,17 @@ export const getMaterialManagerMaterialListItems = (
     if (Array.isArray(summaries) && summaries.length > 0) {
         const summaryByIndex = new Map(summaries.map((summary) => [summary.index, summary]))
         const count = Math.max(summaries.length, legacyCount)
-        return Array.from({ length: count }, (_, index) => (
-            summaryByIndex.get(index) ?? createMaterialManagerMaterialSummaries([legacyMaterials?.[index]])[0] ?? {
+        return Array.from({ length: count }, (_, index) => {
+            const summary = summaryByIndex.get(index)
+            if (summary) return summary
+
+            const legacyRecord = isRecord(legacyMaterials?.[index]) ? legacyMaterials[index] as Record<string, unknown> : {}
+            return {
                 index,
-                layerCount: 0,
+                layerCount: Array.isArray(legacyRecord.Layers) ? legacyRecord.Layers.length : 0,
+                priorityPlane: typeof legacyRecord.PriorityPlane === 'number' ? legacyRecord.PriorityPlane : undefined,
             }
-        ))
+        })
     }
     return createMaterialManagerMaterialSummaries(legacyMaterials)
 }

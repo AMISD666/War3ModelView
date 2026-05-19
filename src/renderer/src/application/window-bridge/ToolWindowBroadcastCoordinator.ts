@@ -56,6 +56,7 @@ export interface ToolWindowBroadcastApi {
     getSequenceManagerState(): SequenceManagerRpcState
     broadcastGlobalSeqManager(state: GlobalSequenceManagerRpcState): void
     getGlobalSeqManagerState(): GlobalSequenceManagerRpcState
+    broadcastKeyframeGlobalSequences(state: GlobalSequenceManagerRpcState): void
     broadcastGlobalColorAdjust(state: GlobalColorAdjustRpcState): void
 }
 
@@ -115,6 +116,7 @@ export class ToolWindowBroadcastCoordinator {
     ): () => void {
         let prevModelData = useModelStore.getState().modelData
         let prevNodes = useModelStore.getState().nodes
+        let prevGlobalSequenceSignature = JSON.stringify(useModelStore.getState().modelData?.GlobalSequences ?? [])
         let prevPickedGeosetIndex = useSelectionStore.getState().pickedGeosetIndex
         let prevSelectedMaterialIndex = useSelectionStore.getState().selectedMaterialIndex
         let prevSelectedMaterialLayerIndex = useSelectionStore.getState().selectedMaterialLayerIndex
@@ -122,8 +124,15 @@ export class ToolWindowBroadcastCoordinator {
         const unsubscribeModel = useModelStore.subscribe((state) => {
             if (state.nodes !== prevNodes || state.modelData !== prevModelData) {
                 const isInitialLoad = !prevModelData && state.modelData
+                const nextGlobalSequenceSignature = JSON.stringify(state.modelData?.GlobalSequences ?? [])
+                const globalSequencesChanged = nextGlobalSequenceSignature !== prevGlobalSequenceSignature
+                prevGlobalSequenceSignature = nextGlobalSequenceSignature
                 prevNodes = state.nodes
                 prevModelData = state.modelData
+
+                if (globalSequencesChanged) {
+                    this.broadcastKeyframeGlobalSequences()
+                }
 
                 if (isInitialLoad) {
                     setTimeout(() => {
@@ -170,6 +179,8 @@ export class ToolWindowBroadcastCoordinator {
         if (!api) {
             return
         }
+
+        this.broadcastKeyframeGlobalSequences()
 
         const visibilityResults = await Promise.all(
             TOOL_WINDOW_VISIBILITY_ORDER.map((windowId) => visibilityGateway.isToolWindowVisible(windowId)),
@@ -267,6 +278,15 @@ export class ToolWindowBroadcastCoordinator {
                 })
             }
         }
+    }
+
+    broadcastKeyframeGlobalSequences(): void {
+        const api = this.api
+        if (!api) {
+            return
+        }
+
+        api.broadcastKeyframeGlobalSequences(api.getGlobalSeqManagerState())
     }
 
     private broadcastSelectionChanges(

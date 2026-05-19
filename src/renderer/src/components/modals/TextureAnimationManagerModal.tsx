@@ -23,6 +23,68 @@ interface TextureAnimationManagerModalProps {
     isStandalone?: boolean;
 }
 
+type TextureAnimTrackField = 'Translation' | 'Rotation' | 'Scaling';
+
+type AnimTrack = {
+    Keys: any[];
+    LineType?: number;
+    InterpolationType?: number;
+    GlobalSeqId?: number | null;
+};
+
+const isAnimTrack = (value: any): value is AnimTrack => (
+    !!value && typeof value === 'object' && Array.isArray(value.Keys)
+);
+
+const resolveTrackLineType = (track: any, fallback: number = 1): number => {
+    const raw = Number(track?.LineType ?? track?.InterpolationType ?? fallback);
+    if (!Number.isFinite(raw)) return fallback;
+    return Math.max(0, Math.min(3, Math.round(raw)));
+};
+
+const getDefaultTrackVector = (field: TextureAnimTrackField): number[] => {
+    if (field === 'Rotation') return [0, 0, 0, 1];
+    if (field === 'Scaling') return [1, 1, 1];
+    return [0, 0, 0];
+};
+
+const createDefaultTrack = (
+    field: TextureAnimTrackField,
+    interpolationType: number = 1,
+    globalSeqId: number | null = null,
+): AnimTrack => ({
+    LineType: interpolationType,
+    InterpolationType: interpolationType,
+    GlobalSeqId: globalSeqId,
+    Keys: [{ Frame: 0, Vector: getDefaultTrackVector(field) }],
+});
+
+const normalizeTrack = (
+    field: TextureAnimTrackField,
+    nextTrack: any,
+    previousTrack?: any,
+): AnimTrack => {
+    const previousInterpolation = resolveTrackLineType(previousTrack, 1);
+    const nextInterpolation = resolveTrackLineType(nextTrack, previousInterpolation);
+    const previousGlobalSeqId = typeof previousTrack?.GlobalSeqId === 'number' ? previousTrack.GlobalSeqId : null;
+    const rawGlobalSeqId = nextTrack?.GlobalSeqId;
+    const nextGlobalSeqId = typeof rawGlobalSeqId === 'number'
+        ? rawGlobalSeqId
+        : (rawGlobalSeqId === null ? null : previousGlobalSeqId);
+    const fallbackTrack = createDefaultTrack(field, nextInterpolation, nextGlobalSeqId);
+
+    return {
+        ...(isAnimTrack(previousTrack) ? previousTrack : fallbackTrack),
+        ...(nextTrack && typeof nextTrack === 'object' ? nextTrack : {}),
+        Keys: Array.isArray(nextTrack?.Keys)
+            ? nextTrack.Keys
+            : (isAnimTrack(previousTrack) ? previousTrack.Keys : fallbackTrack.Keys),
+        LineType: nextInterpolation,
+        InterpolationType: nextInterpolation,
+        GlobalSeqId: nextGlobalSeqId,
+    };
+};
+
 const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> = ({ visible, onClose, isStandalone }) => {
     const { modelData } = useModelStore();
     const rpcClient = useRpcClient<any>('textureAnimManager', {
@@ -40,7 +102,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
     const lastSourceAnimsSigRef = useRef('');
 
     // Editor State
-    const [editingBlock, setEditingBlock] = useState<{ index: number, field: string } | null>(null);
+    const [editingBlock, setEditingBlock] = useState<{ index: number, field: TextureAnimTrackField } | null>(null);
 
     const sourceAnims = isStandalone ? rpcState.textureAnims : modelData?.TextureAnims;
     const globalSequences = isStandalone ? rpcState.globalSequences : (modelData?.GlobalSequences || []) as unknown as number[];
@@ -184,14 +246,14 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         saveToBackend('UPDATE', newAnims, newAnims);
     };
 
-    const toggleBlock = (index: number, key: string, checked: boolean) => {
+    const toggleBlock = (index: number, key: TextureAnimTrackField, checked: boolean) => {
         const currentAnim = localAnims[index];
         const newAnims = [...localAnims];
 
         if (checked) {
             newAnims[index] = {
                 ...currentAnim,
-                [key]: (currentAnim as any)[key] || { InterpolationType: 0, GlobalSeqId: null, Keys: [] }
+                [key]: normalizeTrack(key, (currentAnim as any)?.[key])
             };
         } else {
             const { [key]: _, ...rest } = currentAnim as any;
@@ -205,22 +267,23 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
         if (payload?.callerId !== 'TextureAnimationManagerModal' || !editingBlock) return;
 
         const { index, field } = editingBlock;
-        updateAnim(index, { [field]: payload.data });
+        const previousTrack = (localAnims[index] as any)?.[field];
+        updateAnim(index, { [field]: normalizeTrack(field, payload.data, previousTrack) });
         setEditingBlock(null);
     });
 
-    const getCurrentEditorData = (index: number, field: string) => {
+    const getCurrentEditorData = (index: number, field: TextureAnimTrackField) => {
         if (index < 0) return null;
         const anim = localAnims[index] as any;
-        return anim ? anim[field] : null;
+        return anim ? normalizeTrack(field, anim[field]) : createDefaultTrack(field);
     };
 
-    const getVectorSize = (field: string) => {
+    const getVectorSize = (field: TextureAnimTrackField) => {
         if (field === 'Rotation') return 4;
         return 3;
     };
 
-    const openEditor = (index: number, field: string, label: string) => {
+    const openEditor = (index: number, field: TextureAnimTrackField, label: string) => {
         setEditingBlock({ index, field });
 
         const payload: any = {
@@ -229,7 +292,7 @@ const TextureAnimationManagerModal: React.FC<TextureAnimationManagerModalProps> 
             title: `编辑 ${field}`,
             vectorSize: getVectorSize(field),
             globalSequences: globalSequences,
-            fieldName: 'TextureAnimation',
+            fieldName: field,
             sequences: sequences
         };
 

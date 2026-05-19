@@ -7,6 +7,7 @@ import { useModelStore } from '../../../store/modelStore'
 import { useWindowEvent } from '../../../hooks/useWindowEvent'
 import TextureAnimationManagerModal from '../../modals/TextureAnimationManagerModal'
 import { MATERIAL_FILTER_MODE_OPTIONS } from '../../../constants/filterModes'
+import { createStaticMaterialScalarTrack } from '../../../utils/materialAnimShared'
 
 interface LayerDetailProps {
     layer: any
@@ -37,13 +38,16 @@ const LayerDetail: React.FC<LayerDetailProps> = ({ layer, onUpdate }) => {
             const initialVal = typeof currentVal === 'number' ? currentVal : defaultVal
 
             // Create default AnimVector structure
-            const animVector = {
-                Keys: [
-                    { Frame: 0, Vector: vectorSize === 1 ? [initialVal] : new Array(vectorSize).fill(0) }
-                ],
-                LineType: 0,
-                GlobalSeqId: null
-            }
+            const animVector = vectorSize === 1
+                ? createStaticMaterialScalarTrack(initialVal, modelData?.Sequences, 0)
+                : {
+                    Keys: [
+                        { Frame: 0, Vector: new Array(vectorSize).fill(0) }
+                    ],
+                    LineType: 0,
+                    InterpolationType: 0,
+                    GlobalSeqId: null
+                }
             handleChange(field, animVector)
         } else {
             // Convert to static value (take first key or default)

@@ -3,6 +3,7 @@ import { pasteVertices, VertexCopyBuffer } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { syncRendererGeosetBuffers } from '../application/render'
 
 /**
  * Command to paste copied vertices/polygons as a new geoset
@@ -84,6 +85,12 @@ export class PasteVerticesCommand implements Command {
 
         // Create GPU buffers for the new geoset
         addWar3GeosetBuffers(this.renderer.model, this.newGeosetIndex)
+        syncRendererGeosetBuffers(this.renderer, [this.newGeosetIndex], {
+            vertices: true,
+            normals: true,
+            texCoords: true,
+            groups: true,
+        })
 
         // NOTE: We intentionally do NOT add to modelStore here to avoid sync conflicts.
         // The renderer.model.Geosets is the source of truth for geometry operations.
@@ -110,6 +117,13 @@ export class PasteVerticesCommand implements Command {
         Object.assign(geoset, result.updatedGeoset)
         this.pastedVertexStartIndex = result.newVertexStartIndex
         this.pastedFaceStartIndex = result.newFaceStartIndex
+        addWar3GeosetBuffers(this.renderer.model, this.targetGeosetIndex)
+        syncRendererGeosetBuffers(this.renderer, [this.targetGeosetIndex], {
+            vertices: true,
+            normals: true,
+            texCoords: true,
+            groups: true,
+        })
 
 
         // Sync to store
@@ -168,6 +182,13 @@ export class PasteVerticesCommand implements Command {
             if (geoset) {
                 Object.assign(geoset, this.originalGeosetSnapshot)
             }
+            addWar3GeosetBuffers(this.renderer.model, this.targetGeosetIndex)
+            syncRendererGeosetBuffers(this.renderer, [this.targetGeosetIndex], {
+                vertices: true,
+                normals: true,
+                texCoords: true,
+                groups: true,
+            })
 
             useModelStore.getState().updateGeoset(this.targetGeosetIndex, {
                 Vertices: Array.from(geoset.Vertices),

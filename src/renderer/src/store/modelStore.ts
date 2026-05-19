@@ -9,6 +9,7 @@ import { ModelNode, NodeType } from '../types/node';
 import { Tab, TabSnapshot } from '../types/store';
 import { useRendererStore } from './rendererStore';import { patchNodesForEmitterVisualData } from './modelNodePatch';
 import {
+    pickDefaultSequenceIndex,
     getSequenceStartFrame,
     normalizeSequenceForPlayback,
     normalizeSequencesForPlayback,
@@ -147,46 +148,6 @@ export type MaterialManagerPreview = {
 export type NodeEditorPreview = {
     objectId: number;
     node: ModelNode;
-};
-
-const pickDefaultSequenceIndex = (sequences: any[]) => {
-    if (!Array.isArray(sequences) || sequences.length === 0) return -1;
-
-    const readSequenceName = (seq: any) => (seq?.Name ?? seq?.name ?? '').toString();
-    const readSequenceDuration = (seq: any) => {
-        const interval = Array.isArray(seq?.Interval)
-            ? seq.Interval
-            : ArrayBuffer.isView(seq?.Interval)
-                ? Array.from(seq.Interval as ArrayLike<number>)
-                : [];
-        const start = Number(interval[0] ?? 0);
-        const end = Number(interval[1] ?? start);
-        return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0;
-    };
-
-    const preferredRegex = /stand|idle|walk|move|rest/i;
-    const avoidedRegex = /death|dead|decay|dissipate/i;
-
-    const preferredIndex = sequences.findIndex((seq) => preferredRegex.test(readSequenceName(seq)));
-    if (preferredIndex >= 0) {
-        return preferredIndex;
-    }
-
-    let bestIndex = -1;
-    let bestDuration = -1;
-    sequences.forEach((seq, index) => {
-        const name = readSequenceName(seq);
-        if (avoidedRegex.test(name)) {
-            return;
-        }
-        const duration = readSequenceDuration(seq);
-        if (duration > bestDuration) {
-            bestDuration = duration;
-            bestIndex = index;
-        }
-    });
-
-    return bestIndex >= 0 ? bestIndex : 0;
 };
 
 // DELETED legacy recalculateModelNormals and associated local functions.
@@ -612,6 +573,7 @@ interface ModelState {
 
     // Renderer reload
     triggerRendererReload: () => void;
+    discardActiveRendererCache: (reason?: string) => void;
 
     // Geoset Visibility Actions
     toggleGeosetVisibility: (geosetId: number) => void;
@@ -3177,6 +3139,55 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => ({
             rendererReloadTrigger: state.rendererReloadTrigger + 1
         }));    },
+
+    discardActiveRendererCache: (reason = 'discard_active_renderer_cache') => {
+        const liveRenderer = useRendererStore.getState().renderer;
+        set((state) => {
+            const activeTabId = state.activeTabId;
+            const cachedRenderer = state.cachedRenderer;
+            const rendererToDestroy = rendererBelongsToModelPath(liveRenderer, state.modelPath)
+                ? liveRenderer
+                : cachedRenderer;
+            const tabs = activeTabId
+                ? state.tabs.map((tab) => {
+                    if (tab.id !== activeTabId) return tab;
+                    return {
+                        ...tab,
+                        snapshot: {
+                            ...tab.snapshot,
+                            renderer: null,
+                            lastActive: Date.now()
+                        }
+                    };
+                })
+                : state.tabs;
+
+            if (rendererToDestroy) {
+                try {
+                    (rendererToDestroy as any).destroy?.();
+                } catch {
+                    /* Ignore stale renderer cleanup failures. */
+                }
+            }
+            if (liveRenderer && liveRenderer === rendererToDestroy) {
+                useRendererStore.getState().setRenderer(null);
+            }
+            markStandalonePerf('renderer.cacheDiscarded', {
+                reason,
+                documentId: state.documentId ?? '',
+                modelPath: state.modelPath ?? '',
+                hadLiveRenderer: !!liveRenderer,
+                hadCachedRenderer: !!cachedRenderer,
+            });
+
+            return {
+                tabs,
+                cachedRenderer: null,
+                rendererReloadTrigger: state.rendererReloadTrigger + 1,
+                materialReloadTrigger: state.materialReloadTrigger + 1,
+            };
+        });
+    },
 
     // Geoset Visibility Actions
     toggleGeosetVisibility: (geosetId: number) => {

@@ -278,6 +278,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
             const defaultAnim = {
                 Keys: [{ Frame: 0, Vector: propName === 'Rotation' ? [0, 0, 0, 1] : [0, 0, 0] }],
                 LineType: 1,
+                InterpolationType: 1,
                 GlobalSeqId: null,
             }
 

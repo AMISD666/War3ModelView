@@ -10,6 +10,7 @@ import type {
     RendererSyncError,
     RendererSyncResult,
 } from './RendererSyncTypes'
+import { syncRendererGeosetBuffers } from './RendererGeometrySync'
 
 export const syncGeosetMaterialBindings = (
     input: GeosetMaterialBindingSyncInput,
@@ -91,6 +92,7 @@ export const syncGeosetBuffers = (
         const rendererGeosets = input.renderer.model.Geosets as unknown as Array<Record<string, unknown>>
         const minLen = Math.min(modelGeosets.length, rendererGeosets.length)
         let changed = false
+        const affectedGeosets = new Set<number>()
 
         for (let index = 0; index < minLen; index += 1) {
             const geoset = modelGeosets[index]
@@ -102,7 +104,7 @@ export const syncGeosetBuffers = (
                 const vertexData = geoset.Vertices instanceof Float32Array ? geoset.Vertices : new Float32Array(geoset.Vertices as ArrayLike<number>)
                 rendererGeoset.Vertices = vertexData
                 rendererGeosetMeta.__sourceVerticesRef = geoset.Vertices
-                input.renderer.updateGeosetVertices?.(index, vertexData)
+                affectedGeosets.add(index)
                 changed = true
             }
 
@@ -125,14 +127,22 @@ export const syncGeosetBuffers = (
                 changed = true
             }
 
-            if (rendererGeoset.SkinWeights !== undefined) {
+            if (geoset?.SkinWeights && rendererGeosetMeta.__sourceSkinWeightsRef !== geoset.SkinWeights) {
+                rendererGeoset.SkinWeights = geoset.SkinWeights instanceof Uint8Array
+                    ? geoset.SkinWeights
+                    : new Uint8Array(geoset.SkinWeights as ArrayLike<number>)
+                rendererGeosetMeta.__sourceSkinWeightsRef = geoset.SkinWeights
+                geosetSkinningChanged = true
+                changed = true
+            } else if (!geoset?.SkinWeights && rendererGeoset.SkinWeights !== undefined) {
                 delete rendererGeoset.SkinWeights
                 rendererGeosetMeta.__sourceSkinWeightsRef = undefined
+                geosetSkinningChanged = true
                 changed = true
             }
 
             if (geosetSkinningChanged) {
-                input.renderer.updateGeosetGroups?.(index)
+                affectedGeosets.add(index)
             }
 
             if (geoset?.SelectionGroup !== undefined && rendererGeoset.SelectionGroup !== geoset.SelectionGroup) {
@@ -154,7 +164,7 @@ export const syncGeosetBuffers = (
                 const normalData = geoset.Normals instanceof Float32Array ? geoset.Normals : new Float32Array(geoset.Normals as ArrayLike<number>)
                 rendererGeoset.Normals = normalData
                 rendererGeosetMeta.__sourceNormalsRef = geoset.Normals
-                input.renderer.updateGeosetNormals?.(index, normalData)
+                affectedGeosets.add(index)
                 changed = true
             }
 
@@ -162,9 +172,18 @@ export const syncGeosetBuffers = (
             if (uvSource && rendererGeosetMeta.__sourceTVerticesRef !== uvSource) {
                 const float32Data = uvSource instanceof Float32Array ? uvSource : new Float32Array(uvSource as ArrayLike<number>)
                 rendererGeosetMeta.__sourceTVerticesRef = uvSource
-                input.renderer.updateGeosetTexCoords?.(index, float32Data)
+                affectedGeosets.add(index)
                 changed = true
             }
+        }
+
+        if (affectedGeosets.size > 0) {
+            syncRendererGeosetBuffers(input.renderer, affectedGeosets, {
+                vertices: true,
+                normals: true,
+                texCoords: true,
+                groups: true,
+            })
         }
 
         const result = createSyncResult(input, 'document', 'geosetBuffers', changed)

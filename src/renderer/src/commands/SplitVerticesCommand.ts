@@ -3,6 +3,7 @@ import { splitVertices, SplitResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
 import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { syncRendererGeosetBuffers } from '../application/render'
 import { calculateGeosetExtent, calculateModelExtent } from '../utils/geometryUtils'
 import { modelDocumentCommandHandler } from '../application/commands'
 
@@ -100,7 +101,14 @@ export class SplitVerticesCommand implements Command {
         if (Object.keys(this.splitResult.updatedOriginalGeoset).length > 0) {
             Object.assign(geoset, this.splitResult.updatedOriginalGeoset)
             // Rebuild GPU buffers for modified original geoset
-            addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)        }
+            addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
+            syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], {
+                vertices: true,
+                normals: true,
+                texCoords: true,
+                groups: true,
+            })
+        }
 
         // Add new geoset to model
         // Use targetMaterialId if provided, otherwise inherit from source
@@ -119,6 +127,12 @@ export class SplitVerticesCommand implements Command {
         this.newGeosetIndex = this.renderer.model.Geosets.length - 1
         // Create GPU buffers for the new geoset
         addWar3GeosetBuffers(this.renderer.model, this.newGeosetIndex)
+        syncRendererGeosetBuffers(this.renderer, [this.newGeosetIndex], {
+            vertices: true,
+            normals: true,
+            texCoords: true,
+            groups: true,
+        })
 
         // Clear selection
         useSelectionStore.getState().selectVertices([])
@@ -140,7 +154,14 @@ export class SplitVerticesCommand implements Command {
         this.renderer.model.Geosets.splice(this.newGeosetIndex, 1)
 
         // Rebuild GPU buffers for the restored original geoset
-        addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)        // Sync to store and trigger reload
+        addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
+        syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], {
+            vertices: true,
+            normals: true,
+            texCoords: true,
+            groups: true,
+        })
+        // Sync to store and trigger reload
         this.syncToStore()
     }
 

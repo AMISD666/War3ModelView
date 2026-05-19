@@ -378,7 +378,7 @@ export class SequenceManagerCommandHandler {
 export class GlobalSequenceManagerCommandHandler {
     constructor(private readonly bus: CommandBus = commandBus) { }
 
-    handle(command: string, payload: unknown): void {
+    handle(command: string, payload: unknown, options: { onSaved?: () => void } = {}): void {
         const savePayload = parseGlobalSequenceSavePayload(payload)
         if (!checkTimelineCommandRevision('GlobalSequenceManagerCommandHandler', command, payload)) {
             return
@@ -408,9 +408,18 @@ export class GlobalSequenceManagerCommandHandler {
 
         this.bus.execute({
             name: 'Save Global Sequences',
-            execute: () => applyGlobalSequenceModelPatch(cloneModelData(afterSnapshot)),
-            undo: () => applyGlobalSequenceModelPatch(cloneModelData(beforeSnapshot)),
-            redo: () => applyGlobalSequenceModelPatch(cloneModelData(afterSnapshot)),
+            execute: () => {
+                applyGlobalSequenceModelPatch(cloneModelData(afterSnapshot))
+                options.onSaved?.()
+            },
+            undo: () => {
+                applyGlobalSequenceModelPatch(cloneModelData(beforeSnapshot))
+                options.onSaved?.()
+            },
+            redo: () => {
+                applyGlobalSequenceModelPatch(cloneModelData(afterSnapshot))
+                options.onSaved?.()
+            },
         })
     }
 }

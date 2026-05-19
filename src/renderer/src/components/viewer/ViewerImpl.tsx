@@ -7,7 +7,7 @@ import React,{useEffect,useRef,useState,forwardRef,useImperativeHandle,useMemo,u
 import{textureMaterialCommandHandler}from"../../application/commands";
 import{loadModelDataForViewer}from"../../application/model-import";
 import{previewProjectionService}from"../../application/preview";
-import{projectModelForRealtimeRenderer,rendererSyncService,zoomNodeSizeFromWheel}from"../../application/render";
+import{projectModelForRealtimeRenderer,rendererSyncService,syncRendererGeosetBuffers,zoomNodeSizeFromWheel}from"../../application/render";
 import type{ViewerProps,ViewerRef}from"./ViewerTypes";
 import{createWar3ModelRenderer,type War3ModelRenderer}from"../../infrastructure/render";
 import{desktopGateway}from"../../infrastructure/desktop";
@@ -17,7 +17,7 @@ import ModelWorker from"../../workers/model-worker.worker?worker";
 import TextureAdjustWorker from"../../workers/texture-adjust.worker?worker";import{SimpleOrbitCamera}from"../../utils/SimpleOrbitCamera";import{decodeTextureData,decodeTextureDataAsync,getTextureCandidatePaths,loadAllTextures,normalizePath,prepareModelForTextureLoad}from"./textureLoader";
 import type{WorkerLike}from"./textureLoader";import{validateAllParticleEmitters}from"./particleValidator";import{describePe2AnimOrScalar,pe2PreviewDebugEnabled}from"../../utils/pe2PreviewDebug";import{checkForStructuralChanges,syncParticleEmitters2InPlace}from"./modelSync";import{getEnvironmentManager}from"./EnvironmentManager";import{debugLog,logModelInfo}from"../../utils/debugLogger";import{hexToRgb}from"./types";import{mat3,mat4,vec3,vec4,quat}from"gl-matrix";import{GridRenderer}from"../GridRenderer";import{DebugRenderer}from"../DebugRenderer";import{GizmoRenderer,GizmoAxis,GIZMO_AXIS_LENGTH}from"../GizmoRenderer";import{AxisIndicator}from"../AxisIndicator";import{DEFAULT_TEXTURE_ADJUSTMENTS,applyTextureAdjustments,isDefaultTextureAdjustments,normalizeTextureAdjustments}from"../../utils/textureAdjustments";
 import{reportModelBoundsFallback,selectTrustedModelBounds}from"./ViewerModelBounds";import{reportViewerRenderError,type ViewerRenderDiagnosticRenderer}from"./ViewerRenderDiagnostics";import{finishFailedModelRenderFrame}from"./ViewerRenderRecovery";
-import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{extractNodesFromModel,useModelStore}from"../../store/modelStore";import{DEFAULT_PARTICLE_QUALITY_MODE,useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";
+import type{TextureAdjustments}from"../../utils/textureAdjustments";import{useUIStore}from"../../store/uiStore";import{useSelectionStore}from"../../store/selectionStore";import{extractNodesFromModel,useModelStore}from"../../store/modelStore";import{DEFAULT_PARTICLE_QUALITY_MODE,useRendererStore}from"../../store/rendererStore";import{useHistoryStore}from"../../store/historyStore";import{useUvEditorStore}from"../../store/uvEditorStore";import{ModelInfoPanel}from"../info/ModelInfoPanel";import{ViewerToolbar}from"../ViewerToolbar";import { ConfigProvider, theme } from "antd";import{CameraOutlined,CopyOutlined,SyncOutlined,PauseCircleOutlined,PlayCircleOutlined}from"@ant-design/icons";import{commandManager}from"../../utils/CommandManager";import{MoveVerticesCommand,VertexChange}from"../../commands/MoveVerticesCommand";import{MoveNodesCommand,NodeChange}from"../../commands/MoveNodesCommand";import{SetNodeParentCommand}from"../../commands/SetNodeParentCommand";import{VertexEditor}from"../VertexEditor";import{pickClosestGeoset}from"../../utils/rayTriangle";import{SplitVerticesCommand}from"../../commands/SplitVerticesCommand";import{AutoSeparateLayersCommand}from"../../commands/AutoSeparateLayersCommand";import{WeldVerticesCommand}from"../../commands/WeldVerticesCommand";import{DeleteVerticesCommand}from"../../commands/DeleteVerticesCommand";import{DeleteFacesCommand}from"../../commands/DeleteFacesCommand";import{PasteVerticesCommand}from"../../commands/PasteVerticesCommand";import{UpdateSequenceExtentsCommand}from"../../commands/UpdateSequenceExtentsCommand";import{isTextInputActive,normalizeKeyCombo,normalizeKeyComboFromEvent}from"../../shortcuts/utils";import{registerGeometryDeleteKeyListener}from"../../utils/geometryDeleteShortcutBridge";import{WEBGL_CONTEXT_ATTRIBUTES}from"./ViewerRenderConstants";import{createViewerFramePerfAggregate,roundPerfValue}from"./ViewerPerf";import{collectBoundNodeIds}from"../../utils/boneBindingSelection";
 import type{ViewerFramePerfAggregate,ViewerFramePerfSample}from"./ViewerPerf";import{applyHealthBarOffset,resolveHealthBarState}from"./ViewerHealthBar";import type{HealthBarDragSnapshot,HealthBarState}from"./ViewerHealthBar";import{getLiveTextureSourceKey,getTextureAdjustmentSignature,getTextureDecodeWorkerCount,isTexturePreviewPath,toTextureUpdateUint8Array,toTightArrayBuffer,toUint8Array}from"./ViewerTextureUtils";import{collectReferencedTexturePaths,updateMissingTexturePathsAfterLoad}from"./ViewerTextureUtils";
 import { isGeosetVisible } from "../../utils/geosetVisibility";import { canDeleteNode } from "../../utils/nodeUtils";import { createNodeScreenLabels, drawNodeNameOverlay, findClosestNodeLabel } from "./nodeNameOverlay";import { useNodeNameOverlayRefs } from "./useNodeNameOverlayRefs";import { filterVisibleRendererNodes } from "../../types/nodeVisibility";
 import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadSchedulerState}from"./ViewerTextureUtils";import{GlobalTransformCommand}from"../../commands/GlobalTransformCommand";import{copyVertices,copyFaces,VertexCopyBuffer}from"../../utils/vertexOperations";import{UpdateKeyframeCommand,KeyframeChange}from"../../commands/UpdateKeyframeCommand";import{MissingTextureWarning}from"../MissingTextureWarning";import{GeosetSeparateDialog}from"../modals/GeosetSeparateDialog";import{LayerConfig,layerConfigToMaterialLayer}from"../modals/MaterialLayerOptions";import{NodeType}from"../../types/node";import{openNodeEditor}from"../../utils/nodeEditorOpen";import{nodeTypeToEditorKind}from"../../types/nodeEditorRpc";import{getEffectiveBindings,registerShortcutHandler}from"../../shortcuts/manager";import{markStandalonePerf}from"../../utils/standalonePerf";import{invokeReadMpqFile}from"../../utils/mpqPerf";import{markNodeManagerListScrollFromTree,markNodeManagerListScrollFromViewer}from"../../utils/nodeManagerListScrollBridge";import{collectSelectedGeosetIndices}from"../editors/uvSelectionSync";import{createSelectionRect,pointInRect,segmentIntersectsRect,triangleIntersectsRect}from"../editors/uvSelectionUtils";let globalRenderLoopId=0;const Viewer=forwardRef((props:ViewerProps,ref:React.Ref<ViewerRef>)=>{const{modelPath,animationIndex,teamColor,showGrid,showNodes,showSkeleton,showCollisionShapes,showCameras,showLights,showAttachments,showWireframe,showWireframeOverlay=false,isPlaying,onTogglePlay,onToggleLooping,onToggleWireframe,onModelLoaded,onModelFirstFrameReady,onModelLoadError,backgroundColor,showFPS,playbackSpeed,viewPreset,modelData,onSetViewPreset,onAddCameraFromView}=props;const[parseWorker]=useState(()=>new ModelWorker());const[textureWorkers]=useState<WorkerLike[]>(()=>{const count=getTextureDecodeWorkerCount();return Array.from({length:count},()=>new ModelWorker()as unknown as WorkerLike);});const[loading,setLoading]=useState(false);const[loadingStatus,setLoadingStatus]=useState("");const canvasRef=useRef<HTMLCanvasElement>(null);const[renderer,setRenderer]=useState<War3ModelRenderer|null>(null);const[fps,setFps]=useState<number>(0);const gridRenderer=useRef(new GridRenderer());const debugRenderer=useRef(new DebugRenderer());const gizmoRenderer=useRef(new GizmoRenderer());const axisIndicator=useRef(new AxisIndicator());const rendererRef=useRef<War3ModelRenderer|null>(null);const cameraRef=useRef<SimpleOrbitCamera|null>(null);const appMainMode=useSelectionStore((state)=>state.mainMode);const animationSubMode=useSelectionStore((state)=>state.animationSubMode);const rendererReloadTrigger=useModelStore((state)=>state.rendererReloadTrigger);const cachedRenderer=useModelStore((state)=>state.cachedRenderer);const mpqLoaded=useRendererStore((state)=>state.mpqLoaded);const nodeRenderMode=useRendererStore((state)=>state.nodeRenderMode);const showHealthBar=useRendererStore((state)=>state.showHealthBar);const missingTextures=useRendererStore((state)=>state.missingTextures);const glRef=useRef<WebGL2RenderingContext|WebGLRenderingContext|null>(null);const needsRendererUpdateRef=useRef(false);const bindingParticlePoseSignatureRef=useRef("");const textureReloadSchedulerRef=useRef<TextureReloadSchedulerState>({timer:null,running:false,queued:null,version:0,});const animationFrameId=useRef<number|null>(null);const shouldRunRenderLoop=useRef<boolean>(true);const lastRenderErrorReportTimeRef=useRef<number>(0);const framePerfRef=useRef<ViewerFramePerfAggregate>(createViewerFramePerfAggregate());const lastFpsTime=useRef<number>(performance.now());const lastFrameTime=useRef<number>(performance.now());const frameCount=useRef<number>(0);const renderRef=useRef<((time:number,scheduleNext?:boolean)=>void)|null>(null);const pMatrixRef=useRef(mat4.create());const mvMatrixRef=useRef(mat4.create());const cameraPosRef=useRef(vec3.create());const cameraUpRef=useRef(vec3.fromValues(0,0,1));const cameraQuatRef=useRef(quat.create());const showModelInfo=useUIStore((state)=>state.showModelInfo);const isLooping=useModelStore((state)=>state.isLooping);const setLooping=useModelStore((state)=>state.setLooping);const[texturePreview,setTexturePreview]=useState<{url:string;width:number;height:number;path:string;}|null>(null);const backgroundTextureResolveRunningRef=useRef(false);const attemptedMissingTexturePathsRef=useRef<Set<string>>(new Set());const flushFramePerfSummary=useCallback((reason:string,force=false)=>{const bucket=framePerfRef.current;if(bucket.samples===0)return;if(!force&&bucket.samples<90)return;markStandalonePerf("viewer_frame_profile",{reason,samples:bucket.samples,avgTotalMs:roundPerfValue(bucket.totalMs/bucket.samples),maxTotalMs:roundPerfValue(bucket.maxTotalMs),slowFrameCount:bucket.slowFrameCount,avgClearMs:roundPerfValue(bucket.clearMs/bucket.samples),avgCameraMs:roundPerfValue(bucket.cameraMs/bucket.samples),avgStateMs:roundPerfValue(bucket.stateMs/bucket.samples),avgUpdateMs:roundPerfValue(bucket.updateMs/bucket.samples),avgSceneMs:roundPerfValue(bucket.sceneMs/bucket.samples),avgOverlayMs:roundPerfValue(bucket.overlayMs/bucket.samples),isPlaying:isPlayingRef.current,modelPath:modelPath||"",});framePerfRef.current=createViewerFramePerfAggregate();},[modelPath],);const recordFramePerfSample=useCallback((sample:ViewerFramePerfSample,detail?:Record<string,unknown>)=>{const bucket=framePerfRef.current;bucket.samples+=1;bucket.totalMs+=sample.totalMs;bucket.maxTotalMs=Math.max(bucket.maxTotalMs,sample.totalMs);bucket.clearMs+=sample.clearMs;bucket.cameraMs+=sample.cameraMs;bucket.stateMs+=sample.stateMs;bucket.updateMs+=sample.updateMs;bucket.sceneMs+=sample.sceneMs;bucket.overlayMs+=sample.overlayMs;if(sample.totalMs>=16.7){bucket.slowFrameCount+=1;};const now=performance.now();if(sample.totalMs>=33&&now-bucket.lastSlowEmitMs>=1000){bucket.lastSlowEmitMs=now;markStandalonePerf("viewer_slow_frame",{totalMs:roundPerfValue(sample.totalMs),clearMs:roundPerfValue(sample.clearMs),cameraMs:roundPerfValue(sample.cameraMs),stateMs:roundPerfValue(sample.stateMs),updateMs:roundPerfValue(sample.updateMs),sceneMs:roundPerfValue(sample.sceneMs),overlayMs:roundPerfValue(sample.overlayMs),...detail,});};if(bucket.samples>=90){flushFramePerfSummary("periodic");}},[flushFramePerfSummary],);useEffect(()=>{return()=>{parseWorker.terminate();textureWorkers.forEach((worker)=>worker.terminate?.());};},[parseWorker,textureWorkers]);const reportModelLoadError=(error:unknown,path:string|null)=>{if(onModelLoadError){onModelLoadError(error,path);return;}const message=error instanceof Error?error.message:String(error);appMessage.error({content:`模型加载失败：${message}`,duration:6000});};const formatCameraValue=(value:number):string=>{if(!Number.isFinite(value))return"0";const formatted=value.toFixed(2);return formatted.replace(/.?0+$/,"");};const getCameraVector=(prop:any,directProp?:any):number[]=>{const isArrayLike=(v:any)=>Array.isArray(v)||v instanceof Float32Array||ArrayBuffer.isView(v);const toArray=(v:any)=>(v instanceof Float32Array?Array.from(v):v);if(directProp&&isArrayLike(directProp))return toArray(directProp);if(isArrayLike(prop))return toArray(prop);if(prop&&prop.Keys&&prop.Keys.length>0){const v=prop.Keys[0].Vector;return v?toArray(v):[0,0,0];};return[0,0,0];};const getAvailableCameras=():any[]=>{const{modelData,nodes}=useModelStore.getState();const modelCameras=Array.isArray((modelData as any)?.Cameras)?(modelData as any).Cameras.filter((cam:any)=>cam):[];if(modelCameras.length>0)return modelCameras;return Array.isArray(nodes)?nodes.filter((n:any)=>n&&n.type==="Camera"):[];};const getSelectedCamera=(cameraIndex=selectedCameraIndex):any|null=>{const cameraList=getAvailableCameras();if(cameraIndex<0||cameraIndex>=cameraList.length)return null;return cameraList[cameraIndex]??null;};const clearActiveModelCameraView=()=>{inCameraView.current=false;setActiveModelCameraView(null);};const roundVertexCoord=(value:number):number=>Math.round(value*10000)/10000;const getVertexPositionKey=(vertices:ArrayLike<number>,vertexIndex:number):string=>{const base=vertexIndex*3;return`${roundVertexCoord(Number(vertices[base]??0))},${roundVertexCoord(Number(vertices[base+1]??0))},${roundVertexCoord(Number(vertices[base+2]??0))}`;
@@ -572,6 +572,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         if (forwardSlash !== normalized) {
           currentRenderer.setTextureImageData(forwardSlash, [imageData]);
         }
+        currentRenderer.modelInstance?.syncMaterials?.();
       }
     };
 
@@ -1711,7 +1712,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       // Validate all VertexGroup indices point to valid Groups entries
       const maxGroupIndex = geoset.Groups.length - 1;
       for (let i = 0; i < geoset.VertexGroup.length; i++) {
-        if (geoset.VertexGroup[i] > maxGroupIndex) {
+        if (geoset.VertexGroup[i] !== 65535 && geoset.VertexGroup[i] > maxGroupIndex) {
           geoset.VertexGroup[i] = 0; // Reset to first group
         }
       }
@@ -4265,6 +4266,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       documentRevision: useModelStore.getState().documentRevision,
       previewRevision: useModelStore.getState().previewRevision,
     });
+    needsRendererUpdateRef.current = true;
     lastGeosetAnimsRef.current = modelData.GeosetAnims;
   }, [renderer, modelData?.GeosetAnims]);
 
@@ -5084,10 +5086,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             }
 
             if ((nodeRenderModeRef.current !== "hidden" || useRendererStore.getState().nodeNameDisplayMode !== "hidden") && mdlRenderer.rendererData.nodes && currentMainMode !== "geometry") {
-              const { selectedNodeIds } = useSelectionStore.getState();
+              const { selectedNodeIds, selectedVertexIds } = useSelectionStore.getState();
               const visibleSelectedNodeIds = hiddenNodeIdSet
                 ? selectedNodeIds.filter((nodeId) => isNodeVisibleForRender(nodeId))
                 : selectedNodeIds;
+              const bindingHighlightedNodeIds = currentMainMode === "animation" && currentAnimationSubMode === "binding"
+                ? collectBoundNodeIds(useModelStore.getState().modelData, selectedVertexIds).filter((nodeId) => !visibleSelectedNodeIds.includes(nodeId) && isNodeVisibleForRender(nodeId))
+                : [];
               let parentOfSelected: number | null = null;
               let childrenOfSelected: number[] = [];
 
@@ -5184,8 +5189,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               const nodeCubeEdgeWorldSize = getScreenStableWorldScale(18, cameraRef.current?.target);
               const nodeSize = (nodeCubeEdgeWorldSize / 4.8) * (useRendererStore.getState().nodeSize ?? 1.0);
 
-              nodeRenderModeRef.current !== "hidden" && debugRenderer.current.renderNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, visibleRendererNodes as any, visibleSelectedNodeIds, parentOfSelected, childrenOfSelected, nodeTypeColors, currentMainMode === "animation" && currentAnimationSubMode === "keyframe", nodeSize, nodeRenderModeRef.current === "wireframe" ? "wireframe" : "solid");
-              drawNodeNameOverlay(nodeNameOverlayRef.current, nodeNameLabelsRef.current=createNodeScreenLabels(visibleRendererNodes as any[], mvMatrix, pMatrix, canvas, (nodeWrapper: any) => getOrCreateNodePivot(nodeWrapper)), useRendererStore.getState().nodeNameDisplayMode, visibleSelectedNodeIds, hoveredNodeNameIdRef.current);
+              nodeRenderModeRef.current !== "hidden" && debugRenderer.current.renderNodes(gl as WebGLRenderingContext, mvMatrix, pMatrix, visibleRendererNodes as any, visibleSelectedNodeIds, bindingHighlightedNodeIds, parentOfSelected, childrenOfSelected, nodeTypeColors, currentMainMode === "animation" && currentAnimationSubMode === "keyframe", nodeSize, nodeRenderModeRef.current === "wireframe" ? "wireframe" : "solid");
+              drawNodeNameOverlay(nodeNameOverlayRef.current, nodeNameLabelsRef.current=createNodeScreenLabels(visibleRendererNodes as any[], mvMatrix, pMatrix, canvas, (nodeWrapper: any) => getOrCreateNodePivot(nodeWrapper)), useRendererStore.getState().nodeNameDisplayMode, [...visibleSelectedNodeIds, ...bindingHighlightedNodeIds], hoveredNodeNameIdRef.current);
 
               // 粒子发射器2：在视图/动画等模式下显示宽长矩形框与发射方向（与 particles.ts 中局部 +Z 初速一致）
               if (visibleSelectedNodeIds.length > 0) {
@@ -5360,10 +5365,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             } else {nodeNameLabelsRef.current=[];drawNodeNameOverlay(nodeNameOverlayRef.current, [], "hidden", [], null);}
 
             if (showSkeletonRef.current && mdlRenderer.rendererData.nodes && currentMainMode !== "uv") {
-              const { selectedNodeIds } = useSelectionStore.getState();
+              const { selectedNodeIds, selectedVertexIds } = useSelectionStore.getState();
               const visibleSelectedNodeIds = hiddenNodeIdSet
                 ? selectedNodeIds.filter((nodeId) => isNodeVisibleForRender(nodeId))
                 : selectedNodeIds;
+              const bindingHighlightedNodeIds = currentMainMode === "animation" && currentAnimationSubMode === "binding"
+                ? collectBoundNodeIds(useModelStore.getState().modelData, selectedVertexIds).filter((nodeId) => !visibleSelectedNodeIds.includes(nodeId) && isNodeVisibleForRender(nodeId))
+                : [];
               const visibleNodeNames = hiddenNodeIdSet
                 ? visibleRendererNodes
                     .map((nodeWrapper: any) => nodeWrapper?.node?.Name)
@@ -5371,7 +5379,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 : null;
               if (gl) {
                 gl.disable(gl.DEPTH_TEST);
-                (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, visibleNodeNames, visibleSelectedNodeIds);
+                (mdlRenderer as any).renderSkeleton(mvMatrix, pMatrix, visibleNodeNames, visibleSelectedNodeIds, bindingHighlightedNodeIds);
                 gl.enable(gl.DEPTH_TEST);
               }
             }
@@ -6322,6 +6330,18 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     return base;
   };
 
+  const getAnimTrackLineType = (track: any): number => {
+    const raw = Number(track?.LineType ?? track?.InterpolationType ?? 1);
+    return Number.isFinite(raw) ? raw : 1;
+  };
+
+  const getPreviewKeyTangents = (track: any, vectorSize: number): { InTan?: number[]; OutTan?: number[] } => {
+    const lineType = getAnimTrackLineType(track);
+    return lineType === 2 || lineType === 3
+      ? { InTan: new Array(vectorSize).fill(0), OutTan: new Array(vectorSize).fill(0) }
+      : {};
+  };
+
   const interpolateValueAtFrame = (keys: any[] | undefined, frame: number, defaultVal: number[]): number[] => {
     if (!keys || keys.length === 0) return defaultVal;
     const filtered = keys.filter((k: any) => !k?._isPreviewKey);
@@ -6897,13 +6917,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           v[i + 2] += vecs.moveVec[2];
         });
 
-        affectedGeosets.forEach((geosetIndex) => {
-          if (!rendererRef.current) return;
-          const geoset = rendererRef.current.model.Geosets[geosetIndex];
-          if ((rendererRef.current as any).updateGeosetVertices) {
-            (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices);
-          }
-        });
+        syncRendererGeosetBuffers(rendererRef.current, affectedGeosets, { vertices: true });
         if (affectedGeosets.size > 0) {
           invalidateLiveVertexPointCache();
         }
@@ -7013,7 +7027,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                         }));
                       (rendererNode as any).Translation = {
                         Keys: copiedKeys,
-                        InterpolationType: storeNode?.Translation?.InterpolationType || 1,
+                        LineType: storeNode?.Translation?.LineType ?? storeNode?.Translation?.InterpolationType ?? 1,
+                        InterpolationType: storeNode?.Translation?.InterpolationType ?? storeNode?.Translation?.LineType ?? 1,
                       };
                     }
 
@@ -7074,13 +7089,16 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
                     // 在当前帧注入临时关键帧用于预览
                     const tempKeyIndex = translationKeys.findIndex((k: any) => k._isPreviewKey);
+                    const previewTangents = getPreviewKeyTangents((rendererNode as any).Translation, 3);
                     if (tempKeyIndex >= 0) {
                       translationKeys[tempKeyIndex].Vector = previewTranslation;
                       translationKeys[tempKeyIndex].Frame = frame;
+                      Object.assign(translationKeys[tempKeyIndex], previewTangents);
                     } else {
                       translationKeys.push({
                         Frame: frame,
                         Vector: previewTranslation,
+                        ...previewTangents,
                         _isPreviewKey: true,
                       });
                       translationKeys.sort((a: any, b: any) => a.Frame - b.Frame);
@@ -7204,22 +7222,17 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             }
           }
 
-          affectedGeosets.forEach((geosetIndex) => {
-            if (!rendererRef.current) return;
-            const geoset = rendererRef.current.model.Geosets[geosetIndex];
-            if ((rendererRef.current as any).updateGeosetVertices) {
-              (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices);
-            }
-          });
+          syncRendererGeosetBuffers(rendererRef.current, affectedGeosets, { vertices: true });
           if (affectedGeosets.size > 0) {
             invalidateLiveVertexPointCache();
           }
         }
       }
       // === ANIMATION MODE: ROTATE & SCALE PREVIEW ===
-      else if ((transformMode === "rotate" || transformMode === "scale") && mainMode === "animation" && subMode === "keyframe") {
+      else if ((transformMode === "rotate" || transformMode === "scale") && mainMode === "animation" && (subMode === "binding" || subMode === "keyframe")) {
         const { selectedNodeIds } = useSelectionStore.getState();
         const { currentFrame, nodes } = useModelStore.getState();
+        const previewFrame = subMode === "binding" ? 0 : Math.round(currentFrame);
 
         // Initialize drag data if not exists
         if (!keyframeDragData.current && rendererRef.current) {
@@ -7332,7 +7345,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                 // INJECT into Renderer Model for PREVIEW
                 const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId);
                 if (rendererNode) {
-                  const frame = Math.round(currentFrame);
                   if (!rendererNode.Rotation || !rendererNode.Rotation.Keys?.length) {
                     const storeKeys = storeNode?.Rotation?.Keys || [];
                     const copiedKeys = storeKeys
@@ -7345,19 +7357,23 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                       }));
                     (rendererNode as any).Rotation = {
                       Keys: copiedKeys,
-                      InterpolationType: storeNode?.Rotation?.InterpolationType || 1,
+                      LineType: storeNode?.Rotation?.LineType ?? storeNode?.Rotation?.InterpolationType ?? 1,
+                      InterpolationType: storeNode?.Rotation?.InterpolationType ?? storeNode?.Rotation?.LineType ?? 1,
                     };
                   }
 
                   const keys = ((rendererNode as any).Rotation?.Keys || []) as any[];
                   const previewIndex = keys.findIndex((k: any) => k._isPreviewKey);
+                  const previewTangents = getPreviewKeyTangents((rendererNode as any).Rotation, 4);
                   if (previewIndex >= 0) {
                     keys[previewIndex].Vector = [newRot[0], newRot[1], newRot[2], newRot[3]];
-                    keys[previewIndex].Frame = frame;
+                    keys[previewIndex].Frame = previewFrame;
+                    Object.assign(keys[previewIndex], previewTangents);
                   } else {
                     keys.push({
-                      Frame: frame,
+                      Frame: previewFrame,
                       Vector: [newRot[0], newRot[1], newRot[2], newRot[3]],
+                      ...previewTangents,
                       _isPreviewKey: true,
                     });
                   }
@@ -7403,7 +7419,6 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               // INJECT into Renderer Model for PREVIEW
               const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId);
               if (rendererNode) {
-                const frame = Math.round(currentFrame);
                 if (!rendererNode.Scaling || !rendererNode.Scaling.Keys?.length) {
                   const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId);
                   const storeKeys = storeNode?.Scaling?.Keys || [];
@@ -7417,19 +7432,23 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
                     }));
                   (rendererNode as any).Scaling = {
                     Keys: copiedKeys,
-                    InterpolationType: storeNode?.Scaling?.InterpolationType || 1,
+                    LineType: storeNode?.Scaling?.LineType ?? storeNode?.Scaling?.InterpolationType ?? 1,
+                    InterpolationType: storeNode?.Scaling?.InterpolationType ?? storeNode?.Scaling?.LineType ?? 1,
                   };
                 }
 
                 const keys = ((rendererNode as any).Scaling?.Keys || []) as any[];
                 const previewIndex = keys.findIndex((k: any) => k._isPreviewKey);
+                const previewTangents = getPreviewKeyTangents((rendererNode as any).Scaling, 3);
                 if (previewIndex >= 0) {
                   keys[previewIndex].Vector = [newScale[0], newScale[1], newScale[2]];
-                  keys[previewIndex].Frame = frame;
+                  keys[previewIndex].Frame = previewFrame;
+                  Object.assign(keys[previewIndex], previewTangents);
                 } else {
                   keys.push({
-                    Frame: frame,
+                    Frame: previewFrame,
                     Vector: [newScale[0], newScale[1], newScale[2]],
+                    ...previewTangents,
                     _isPreviewKey: true,
                   });
                 }
@@ -7833,6 +7852,80 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             }
             initialNodePositions.current.clear();
           }
+
+          const { selectedNodeIds, transformMode } = useSelectionStore.getState();
+          if ((transformMode === "rotate" || transformMode === "scale") && keyframeDragData.current) {
+            const { nodes } = useModelStore.getState();
+            const frame = 0;
+            const keyframeChanges: KeyframeChange[] = [];
+
+            const isSameVec = (a: number[] | null, b: number[] | null, eps = 1e-4) => {
+              if (!a || !b || a.length !== b.length) return false;
+              for (let i = 0; i < a.length; i++) {
+                if (Math.abs(a[i] - b[i]) > eps) return false;
+              }
+              return true;
+            };
+
+            selectedNodeIds.forEach((nodeId) => {
+              const storeNode = nodes.find((n: any) => n && n.ObjectId === nodeId);
+              if (!storeNode) return;
+
+              if (transformMode === "rotate") {
+                const currentVal = keyframeDragData.current?.initialValues.get(nodeId);
+                if (!currentVal) return;
+                const newValue = Array.from(currentVal.rotation as any) as number[];
+                const existingKey = storeNode.Rotation?.Keys?.find((k: any) => Math.abs(k.Frame - frame) < 0.1);
+                const oldValue = existingKey?.Vector ? (Array.isArray(existingKey.Vector) ? [...existingKey.Vector] : Array.from(existingKey.Vector)) : null;
+                const baseValue = oldValue ?? [0, 0, 0, 1];
+                if (!oldValue && isSameVec(newValue, baseValue)) return;
+                if (oldValue && isSameVec(newValue, oldValue)) return;
+                keyframeChanges.push({
+                  nodeId,
+                  propertyName: "Rotation",
+                  frame,
+                  oldValue,
+                  newValue,
+                });
+              } else if (transformMode === "scale") {
+                const currentVal = keyframeDragData.current?.initialValues.get(nodeId);
+                if (!currentVal) return;
+                const newValue = Array.from(currentVal.scaling as any) as number[];
+                const existingKey = storeNode.Scaling?.Keys?.find((k: any) => Math.abs(k.Frame - frame) < 0.1);
+                const oldValue = existingKey?.Vector ? (Array.isArray(existingKey.Vector) ? [...existingKey.Vector] : Array.from(existingKey.Vector)) : null;
+                const baseValue = oldValue ?? [1, 1, 1];
+                if (!oldValue && isSameVec(newValue, baseValue)) return;
+                if (oldValue && isSameVec(newValue, oldValue)) return;
+                keyframeChanges.push({
+                  nodeId,
+                  propertyName: "Scaling",
+                  frame,
+                  oldValue,
+                  newValue,
+                });
+              }
+            });
+
+            if (rendererRef.current?.model?.Nodes) {
+              selectedNodeIds.forEach((nodeId) => {
+                const rendererNode = rendererRef.current!.model.Nodes.find((n: any) => n && n.ObjectId === nodeId);
+                if (rendererNode?.Rotation?.Keys) {
+                  rendererNode.Rotation.Keys = rendererNode.Rotation.Keys.filter((k: any) => !k._isPreviewKey);
+                }
+                if (rendererNode?.Scaling?.Keys) {
+                  rendererNode.Scaling.Keys = rendererNode.Scaling.Keys.filter((k: any) => !k._isPreviewKey);
+                }
+              });
+            }
+
+            if (keyframeChanges.length > 0) {
+              const cmd = new UpdateKeyframeCommand(rendererRef.current, keyframeChanges);
+              commandManager.execute(cmd);
+            }
+          }
+
+          keyframeTransformDirty.current = false;
+          keyframeDragData.current = null;
         } else if (mainMode === "animation" && animationSubMode === "keyframe") {
           const { selectedNodeIds } = useSelectionStore.getState();
           // 1. Translation (using DragDelta)

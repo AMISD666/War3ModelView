@@ -5,6 +5,7 @@
 
 import { useCallback, useRef } from 'react'
 import { vec3, mat4 } from 'gl-matrix'
+import { syncRendererGeosetBuffers } from '../../../application/render'
 import { useSelectionStore } from '../../../store/selectionStore'
 import { useModelStore } from '../../../store/modelStore'
 import type { GizmoAxis, CameraState } from '../types'
@@ -285,13 +286,7 @@ export function useGizmoTransform({
             v[i + 2] += moveVec[2]
         })
 
-        // Update GPU buffers
-        affectedGeosets.forEach(geosetIndex => {
-            const geoset = rendererRef.current.model.Geosets[geosetIndex]
-            if ((rendererRef.current as any).updateGeosetVertices) {
-                (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
-            }
-        })
+        syncRendererGeosetBuffers(rendererRef.current, affectedGeosets, { vertices: true })
     }, [rendererRef])
 
     /**
@@ -499,13 +494,7 @@ export function useGizmoTransform({
             }
         }
 
-        // Update GPU buffers
-        affectedGeosets.forEach(geosetIndex => {
-            const geoset = rendererRef.current.model.Geosets[geosetIndex]
-            if ((rendererRef.current as any).updateGeosetVertices) {
-                (rendererRef.current as any).updateGeosetVertices(geosetIndex, geoset.Vertices)
-            }
-        })
+        syncRendererGeosetBuffers(rendererRef.current, affectedGeosets, { vertices: true })
     }, [rendererRef])
 
     /**

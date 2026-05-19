@@ -7,6 +7,7 @@ mod app_settings;
 mod copy_utils;
 mod delete_utils;
 mod fbx_import;
+mod jumpx_import;
 mod model_manifest;
 mod mpq_manager;
 mod remote_activation_policy;
@@ -1910,6 +1911,8 @@ fn main() {
             // Native Import Commands
             fbx_import::probe_fbx_native_import,
             fbx_import::import_fbx_static_scene,
+            jumpx_import::probe_jumpx_import,
+            jumpx_import::import_jumpx_static_scene,
             load_textures_batch_bin,
             load_textures_batch_thumb_rgba,
             clear_texture_batch_cache,

@@ -1,4 +1,5 @@
 import { Command } from '../utils/CommandManager'
+import { syncRendererGeosetBuffers } from '../application/render'
 
 export interface VertexChange {
     geosetIndex: number
@@ -40,10 +41,7 @@ export class MoveVerticesCommand implements Command {
         }
 
         for (const geoIndex of affectedGeosets) {
-            const geoset = this.renderer.model.Geosets[geoIndex]
-            if (this.renderer.updateGeosetVertices) {
-                this.renderer.updateGeosetVertices(geoIndex, geoset.Vertices)
-            }
+            syncRendererGeosetBuffers(this.renderer, [geoIndex], { vertices: true })
         }
 
         if (this.onSync) {

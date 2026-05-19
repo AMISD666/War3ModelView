@@ -275,6 +275,16 @@ const MainLayout: React.FC = () => {
     const toggleModelInfo = useUIStore(state => state.toggleModelInfo)
     const mainMode = useSelectionStore(state => state.mainMode)
     const setMainMode = useSelectionStore(state => state.setMainMode)
+    const discardActiveRendererCache = useModelStore(state => state.discardActiveRendererCache)
+    const previousMainModeRef = useRef(mainMode)
+
+    useEffect(() => {
+        const previousMainMode = previousMainModeRef.current
+        previousMainModeRef.current = mainMode
+        if (mainMode === 'retarget' && previousMainMode !== 'retarget') {
+            discardActiveRendererCache('enter_retarget_mode')
+        }
+    }, [discardActiveRendererCache, mainMode])
 
 
 
@@ -482,6 +492,7 @@ const MainLayout: React.FC = () => {
         cameras: unknown[]
         globalSequences: number[]
     }) => void>(() => { })
+    const globalSequenceBroadcasterRef = useRef<(state: GlobalSequenceManagerRpcState) => void>(() => { })
 
     const nodeEditorSnapshotCacheRef = useRef({
         snapshotVersion: 0,
@@ -1681,9 +1692,23 @@ const MainLayout: React.FC = () => {
         };
     }, []);
 
+    const broadcastKeyframeGlobalSequences = useCallback((state: GlobalSequenceManagerRpcState) => {
+        void windowManager.broadcastKeyframeGlobalSequences({
+            documentId: state.documentId,
+            documentRevision: state.documentRevision,
+            globalSequences: state.globalSequences,
+        })
+    }, [])
+
     const handleGlobalSeqCommand = useCallback((command: string, payload: any) => {
-        globalSequenceManagerCommandHandler.handle(command, payload)
-    }, []);
+        globalSequenceManagerCommandHandler.handle(command, payload, {
+            onSaved: () => {
+                const latestState = getGlobalSeqManagerState()
+                globalSequenceBroadcasterRef.current(latestState)
+                toolWindowBroadcastCoordinatorRef.current.broadcastKeyframeGlobalSequences()
+            },
+        })
+    }, [broadcastKeyframeGlobalSequences, getGlobalSeqManagerState]);
 
     const { broadcastSync: broadcastGlobalSeqManager } = useRpcServer<GlobalSequenceManagerRpcState>(
         'globalSequenceManager',
@@ -1718,6 +1743,7 @@ const MainLayout: React.FC = () => {
 
     useEffect(() => {
         cameraManagerBroadcasterRef.current = broadcastCameraManager
+        globalSequenceBroadcasterRef.current = broadcastGlobalSeqManager
         toolWindowBroadcastCoordinatorRef.current.setApi({
             broadcastCameraManager, getCameraManagerState,
             broadcastGeosetEditor, getGeosetManagerState,
@@ -1728,7 +1754,7 @@ const MainLayout: React.FC = () => {
             broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
             broadcastNodeEditor, getNodeEditorState,
             broadcastSequenceManager, getSequenceManagerState,
-            broadcastGlobalSeqManager, getGlobalSeqManagerState,
+            broadcastGlobalSeqManager, getGlobalSeqManagerState, broadcastKeyframeGlobalSequences,
             broadcastGlobalColorAdjust,
         })
     }, [
@@ -1741,7 +1767,7 @@ const MainLayout: React.FC = () => {
         broadcastMaterialManager, broadcastMaterialManagerPatch, getMaterialManagerState,
         broadcastNodeEditor, getNodeEditorState,
         broadcastSequenceManager, getSequenceManagerState,
-        broadcastGlobalSeqManager, getGlobalSeqManagerState,
+        broadcastGlobalSeqManager, getGlobalSeqManagerState, broadcastKeyframeGlobalSequences,
         broadcastGlobalColorAdjust,
     ])
 

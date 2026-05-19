@@ -35,7 +35,7 @@ import {
     materialManagerSequenceSummariesToKeyframeSequences,
     materialManagerTextureAnimSummariesToPlaceholders,
 } from '../../application/window-bridge/MaterialManagerSnapshotPayload'
-import { getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
+import { createStaticMaterialScalarTrack, getMaterialTrackEditorTitle, getMaterialTrackFieldName } from '../../utils/materialAnimShared'
 import { useMaterialEditorStandaloneEvents } from './material-editor/useMaterialEditorStandaloneEvents'
 import { useMaterialEditorMainWindowFileDrop } from './material-editor/useMaterialEditorMainWindowFileDrop'
 import { desktopGateway } from '../../infrastructure/desktop'
@@ -802,6 +802,11 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         const hasStandalonePreviewChanges =
             isStandalone && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)
 
+        if (isStandalone && !hasStandalonePreviewChanges) {
+            onClose()
+            return
+        }
+
         if (!hasChanges) {
             if (hasStandalonePreviewChanges) {
                 isCommittingRef.current = true
@@ -1270,11 +1275,14 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             const initialVal = typeof currentVal === 'number'
                 ? (field === 'TextureID' ? Math.max(0, Math.round(currentVal)) : currentVal)
                 : defaultVal
-            const animVector = {
-                Keys: [{ Frame: 0, Vector: vectorSize === 1 ? [initialVal] : new Array(vectorSize).fill(0) }],
-                LineType: 0,
-                GlobalSeqId: null
-            }
+            const animVector = vectorSize === 1
+                ? createStaticMaterialScalarTrack(initialVal, modelData?.Sequences, 0)
+                : {
+                    Keys: [{ Frame: 0, Vector: new Array(vectorSize).fill(0) }],
+                    LineType: 0,
+                    InterpolationType: 0,
+                    GlobalSeqId: null
+                }
             updateLocalLayer(activeMaterialIndex, activeLayerIndex, { [field]: animVector })
         } else {
             const currentVal = layer[field]

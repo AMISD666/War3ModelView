@@ -18,7 +18,7 @@ export interface Texture {
 export interface MaterialLayer {
     FilterMode: string;  // 'None' | 'Transparent' | 'Blend' | 'Additive' | 'AddAlpha' | 'Modulate' etc.
     TextureID: number;
-    Alpha?: number;
+    Alpha?: number | object;
     TextureAnimationId?: number;
     TVertexAnimId?: number | null;
     CoordId?: number;

@@ -14,6 +14,14 @@ import {
     isKeyframeAnimVectorIntTrack,
     vectorToPlainArray,
 } from '../../utils/animVectorIpc'
+import {
+    convertDisplayKeysToStorage,
+    generateKeyframeText,
+    getDisplayVectorSize,
+    isRotationKeyframeTrack,
+    parseKeyframeText,
+    type RotationDisplayMode,
+} from './keyframeTextFormat'
 
 const { TextArea } = Input
 
@@ -56,6 +64,15 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const sequences = isStandalone ? standaloneData.sequences : (props.sequences ?? [])
     const fieldName = isStandalone ? standaloneData.fieldName : (props.fieldName ?? '')
     const initialData = isStandalone ? standaloneData.initialData : props.initialData
+    const documentId = isStandalone ? standaloneData.documentId : null
+    const documentRevision = isStandalone ? standaloneData.documentRevision : undefined
+    const handleStandaloneGlobalSequencesChange = (nextGlobalSequences: number[]) => {
+        if (!isStandalone) return
+        setStandaloneData((previous: any) => ({
+            ...previous,
+            globalSequences: nextGlobalSequences,
+        }))
+    }
 
     const modelData = useModelStore(state => state.modelData) as any
     const [text, setText] = useState('')
@@ -63,6 +80,7 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const [globalSeqId, setGlobalSeqId] = useState<number | null>(null)
     const [textScrollTop, setTextScrollTop] = useState(0)
     const keyframeInitHandlerRef = useRef<(payload: any) => void>(() => {})
+    const [rotationDisplayMode, setRotationDisplayMode] = useState<RotationDisplayMode>('degrees')
 
     // Batch Generation State
     const [batchValue, setBatchValue] = useState<number>(1)
@@ -77,6 +95,12 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
     const [textureBatchStartFrame, setTextureBatchStartFrame] = useState<number>(0)
     const [textureBatchInterval, setTextureBatchInterval] = useState<number>(100)
     const [textureBatchRepeatCount, setTextureBatchRepeatCount] = useState<number>(2)
+
+    const resolveAnimLineType = (anim: any, fallback: number = 0): number => {
+        const raw = Number(anim?.LineType ?? anim?.InterpolationType ?? fallback)
+        if (!Number.isFinite(raw)) return fallback
+        return Math.max(0, Math.min(3, Math.round(raw)))
+    }
 
     // Check if editing TextureID
     const isTextureIDField =
@@ -97,94 +121,48 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         title.includes('环境色')
     )
 
+    const isRotationTrack = isRotationKeyframeTrack(vectorSize, fieldName, title)
+
     // Helper to format a single vector/scalar value
     const formatValue = (val: number | number[] | Float32Array | undefined | null, vSize: number = vectorSize): string => {
-        const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
-        if (val === undefined || val === null) {
-            return normalizedSize === 1 ? '0' : `{ ${new Array(normalizedSize).fill('0').join(', ')} }`
-        }
-
-        let nums: number[] = []
-        if (typeof val === 'number') {
-            nums = [val]
-        } else if (Array.isArray(val)) {
-            nums = [...val]
-        } else {
-            nums = Array.from(val as Float32Array)
-        }
-
-        while (nums.length < normalizedSize) nums.push(0)
-        nums = nums.slice(0, normalizedSize)
-
-        const parts = nums.map(n => {
-            const num = n ?? 0
-            return Number(num.toFixed(6)).toString()
-        })
-
-        if (normalizedSize === 1) return parts[0] || '0'
-        return `{ ${parts.join(', ')} }`
+        return generateKeyframeText(
+            [{ Frame: 0, Vector: val, InTan: undefined, OutTan: undefined }],
+            0,
+            {
+                vectorSize: Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize,
+                rotationTrack: isRotationTrack,
+                rotationDisplayMode,
+            }
+        ).replace(/^0:\s*/, '')
     }
 
 
     // Helper to parse a value string like "{ 1, 0, 0 }" or "0.5"
     const parseValue = (str: string, vSize: number = vectorSize): number[] => {
-        const normalizedSize = Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize
-        const clean = str.replace(/[{}]/g, '').trim()
-        const parts = clean.split(/[,\s]+/).filter(Boolean)
-        const nums = parts.map(p => parseFloat(p)).filter(n => !isNaN(n))
-
-        // Pad or truncate
-        while (nums.length < normalizedSize) nums.push(0)
-        return nums.slice(0, normalizedSize)
+        const keys = parseKeyframeText(`0: ${str}`, {
+            vectorSize: Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize,
+            rotationTrack: isRotationTrack,
+            rotationDisplayMode,
+        })
+        return Array.isArray(keys[0]?.Vector) ? keys[0].Vector : []
     }
 
     // Generate formatted text from keys
     const generateText = (keys: any[], type: number, vSize: number = vectorSize) => {
-        return keys.map(k => {
-            let lines = [`${k.Frame}: ${formatValue(k.Vector, vSize)}`]
-
-            if (type > 1) { // Hermite or Bezier
-                const defaultTan = new Array(vSize).fill(0)
-                lines.push(`  InTan: ${formatValue(k.InTan || defaultTan, vSize)}`)
-                lines.push(`  OutTan: ${formatValue(k.OutTan || defaultTan, vSize)}`)
-            }
-            return lines.join('\n')
-        }).join('\n')
+        return generateKeyframeText(keys, type, {
+            vectorSize: Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize,
+            rotationTrack: isRotationTrack,
+            rotationDisplayMode,
+        })
     }
 
     // Parse current text into keys
     const parseText = (currentText: string, vSize: number = vectorSize): any[] => {
-        const lines = currentText.split('\n')
-        const keys: any[] = []
-        let currentKey: any = null
-
-        for (const line of lines) {
-            const trimmed = line.trim()
-            if (!trimmed) continue
-
-            if (trimmed.startsWith('InTan:')) {
-                if (currentKey) currentKey.InTan = parseValue(trimmed.substring(6), vSize)
-            } else if (trimmed.startsWith('OutTan:')) {
-                if (currentKey) currentKey.OutTan = parseValue(trimmed.substring(7), vSize)
-            } else {
-                // Assume Frame: Value
-                const parts = trimmed.split(':')
-                if (parts.length >= 2) {
-                    const frame = parseInt(parts[0])
-                    if (!isNaN(frame)) {
-                        const valStr = parts.slice(1).join(':')
-                        currentKey = {
-                            Frame: frame,
-                            Vector: parseValue(valStr, vSize),
-                            InTan: new Array(vSize).fill(0),
-                            OutTan: new Array(vSize).fill(0)
-                        }
-                        keys.push(currentKey)
-                    }
-                }
-            }
-        }
-        return keys.sort((a, b) => a.Frame - b.Frame)
+        return parseKeyframeText(currentText, {
+            vectorSize: Number.isFinite(vSize) && vSize > 0 ? vSize : vectorSize,
+            rotationTrack: isRotationTrack,
+            rotationDisplayMode,
+        })
     }
 
     const deferredText = React.useDeferredValue(text);
@@ -563,15 +541,34 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         setText(newText)
     }
 
+    const toggleRotationDisplayMode = () => {
+        if (!isRotationTrack) return
+        const storageKeys = convertDisplayKeysToStorage(parseText(text, vectorSize), {
+            vectorSize,
+            rotationTrack: true,
+            rotationDisplayMode,
+        })
+        const nextMode: RotationDisplayMode = rotationDisplayMode === 'degrees' ? 'quaternion' : 'degrees'
+        setRotationDisplayMode(nextMode)
+        setText(generateKeyframeText(storageKeys, lineType, {
+            vectorSize,
+            rotationTrack: true,
+            rotationDisplayMode: nextMode,
+        }))
+    }
+
     useEffect(() => {
         if (!isStandalone && visible) {            if (initialData && initialData.Keys && initialData.Keys.length > 0) {
                 const normalizedKeys = normalizeKeys(initialData.Keys, vectorSize)
-                setLineType(initialData.LineType ?? 0)
+                const initialLineType = resolveAnimLineType(initialData, 0)
+                setLineType(initialLineType)
                 setGlobalSeqId(initialData.GlobalSeqId ?? null)
-                setText(generateText(normalizedKeys, initialData.LineType || 0, vectorSize))
+                setRotationDisplayMode(isRotationTrack ? 'degrees' : 'quaternion')
+                setText(generateText(normalizedKeys, initialLineType, vectorSize))
             } else {
                 setLineType(0)
                 setGlobalSeqId(null)
+                setRotationDisplayMode(isRotationTrack ? 'degrees' : 'quaternion')
                 const defVector = getDefaultVector()
                 const defaultKey = {
                     Frame: 0,
@@ -624,6 +621,8 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
             initialData: normalizedInitData,
             title: titleStr,
             vectorSize: vSize,
+            documentId: typeof payload.documentId === 'string' || payload.documentId === null ? payload.documentId : undefined,
+            documentRevision: typeof payload.documentRevision === 'number' ? payload.documentRevision : undefined,
             globalSequences: payload.globalSequences || [],
             sequences: payload.sequences || [],
             fieldName: fName,
@@ -631,11 +630,13 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
         })
         setStandaloneReady(true)
 
-        setLineType(initData?.LineType ?? 0)
+        const initialLineType = resolveAnimLineType(initData, 0)
+        setLineType(initialLineType)
         setGlobalSeqId(initData?.GlobalSeqId ?? null)
+        setRotationDisplayMode(isRotationKeyframeTrack(vSize, fName, titleStr) ? 'degrees' : 'quaternion')
 
         if (normalizedInitData && normalizedInitData.Keys && normalizedInitData.Keys.length > 0) {
-            setText(generateText(normalizedInitData.Keys, (initData as any)?.LineType ?? 0, vSize))
+            setText(generateText(normalizedInitData.Keys, initialLineType, vSize))
         } else {
             const defVector = vSize === 4 ? [0, 0, 0, 1] : new Array(vSize).fill(titleStr.includes('Scale') ? 1 : (fName.includes('Alpha') ? 1 : 0))
             setText(generateText([{ Frame: 0, Vector: defVector, InTan: new Array(vSize).fill(0), OutTan: new Array(vSize).fill(0) }], 0, vSize))
@@ -648,7 +649,6 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
         let disposed = false
         let unlisten: (() => void) | null = null
-
         void windowGateway.listen('IPC_KEYFRAME_INIT', (event) => {
             keyframeInitHandlerRef.current((event as { payload?: any }).payload)
         }).then((nextUnlisten) => {
@@ -691,12 +691,18 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
 
     const handleOk = () => {
         const rawKeys = parseText(text, vectorSize)
+        const storageKeys = convertDisplayKeysToStorage(rawKeys, {
+            vectorSize,
+            rotationTrack: isRotationTrack,
+            rotationDisplayMode,
+        })
         const isIntTrack = isKeyframeAnimVectorIntTrack(fieldName) || isTextureIDField
-        const keys = isIntTrack ? normalizeIntTrackKeys(rawKeys) : rawKeys
+        const keys = isIntTrack ? normalizeIntTrackKeys(storageKeys) : storageKeys
 
         const result = {
             Keys: keys,
             LineType: lineType,
+            InterpolationType: lineType,
             GlobalSeqId: globalSeqId === -1 ? null : globalSeqId
         }
 
@@ -804,6 +810,10 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                             value={globalSeqId}
                             onChange={setGlobalSeqId}
                             isStandalone={isStandalone}
+                            documentId={documentId}
+                            documentRevision={documentRevision}
+                            globalSequences={isStandalone ? globalSequences : undefined}
+                            onGlobalSequencesChange={isStandalone ? handleStandaloneGlobalSequencesChange : undefined}
                         />
                     </Col>
                     <Col span={12}>
@@ -938,6 +948,17 @@ const KeyframeEditor: React.FC<KeyframeEditorProps> = (props) => {
                         </Button>
                     </div>
                 )}
+                {isRotationTrack ? (
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #4a4a4a', display: 'flex', justifyContent: 'flex-start' }}>
+                        <Button
+                            size="small"
+                            onClick={toggleRotationDisplayMode}
+                            style={{ background: 'transparent', borderColor: '#4a4a4a', color: '#e8e8e8' }}
+                        >
+                            {rotationDisplayMode === 'degrees' ? '切换到四元数' : '切换到角度'}
+                        </Button>
+                    </div>
+                ) : null}
             </div>
         </div>
     );

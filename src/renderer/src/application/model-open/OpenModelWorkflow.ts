@@ -7,6 +7,7 @@ import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
 import type { ModelData } from '../../types/model'
 import type { AppMode } from '../../store/selectionStore'
+import { pickDefaultSequenceIndex } from '../../utils/sequenceUtils'
 import { FBX_PRO_FEATURE_NAME, isFbxSourcePath } from '../model-import/fbxSourcePath'
 import { requireProFeature } from '../../utils/featureGate'
 
@@ -51,12 +52,12 @@ export const DEFAULT_IMPORT_FILE_DIALOG_OPTIONS: OpenFileDialogOptions = {
     multiple: false,
     filters: [{
         name: '魔兽争霸3资源',
-        extensions: ['mdx', 'mdl', 'fbx', 'blp', 'tga', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'],
+        extensions: ['mdx', 'mdl', 'fbx', 'x', 'blp', 'tga', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'],
     }],
 }
 
-const MODEL_FILE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx'])
-const OPENABLE_RESOURCE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx', 'blp', 'tga', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
+const MODEL_FILE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx', 'x'])
+const OPENABLE_RESOURCE_EXTENSIONS = new Set(['mdx', 'mdl', 'fbx', 'x', 'blp', 'tga', 'png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
 
 const getFileExtension = (path: string): string => {
     const dotIndex = path.lastIndexOf('.')
@@ -165,7 +166,7 @@ export class OpenModelWorkflow {
                 const store = useModelStore.getState()
                 if (!isSameModel || store.currentSequence === -1) {
                     const preferredSequence = store.currentSequence
-                    const nextSequence = preferredSequence >= 0 ? preferredSequence : 0
+                    const nextSequence = preferredSequence >= 0 ? preferredSequence : pickDefaultSequenceIndex(data.Sequences ?? [])
                     store.setSequence(nextSequence)
                     store.setPlaying(true)
                 }

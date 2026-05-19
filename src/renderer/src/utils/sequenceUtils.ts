@@ -3,6 +3,18 @@ const toFiniteNumber = (value: unknown, fallback: number): number => {
     return Number.isFinite(numeric) ? numeric : fallback
 }
 
+const readSequenceName = (sequence: unknown): string => {
+    if (!sequence || typeof sequence !== 'object') return ''
+    const record = sequence as { Name?: unknown; name?: unknown }
+    return (record.Name ?? record.name ?? '').toString()
+}
+
+const getSequenceDuration = (sequence: unknown): number => {
+    const interval = normalizeSequenceInterval((sequence as { Interval?: unknown } | null)?.Interval)
+    if (!interval) return 0
+    return Math.max(0, interval[1] - interval[0])
+}
+
 const looksLikeUint32Bytes = (values: unknown[]): values is number[] =>
     values.length >= 8
     && values.length % 4 === 0
@@ -80,4 +92,31 @@ export const getSequenceStartFrame = (sequence: unknown): number => {
     if (!sequence || typeof sequence !== 'object') return 0
     const interval = normalizeSequenceInterval((sequence as { Interval?: unknown }).Interval)
     return interval ? interval[0] : 0
+}
+
+export const pickDefaultSequenceIndex = (sequences: unknown[]): number => {
+    if (!Array.isArray(sequences) || sequences.length === 0) return -1
+
+    const preferredRegex = /stand|idle|walk|move|rest/i
+    const avoidedRegex = /death|dead|decay|dissipate/i
+
+    const preferredIndex = sequences.findIndex((sequence) => preferredRegex.test(readSequenceName(sequence)))
+    if (preferredIndex >= 0) {
+        return preferredIndex
+    }
+
+    let bestIndex = -1
+    let bestDuration = -1
+    sequences.forEach((sequence, index) => {
+        if (avoidedRegex.test(readSequenceName(sequence))) {
+            return
+        }
+        const duration = getSequenceDuration(sequence)
+        if (duration > bestDuration) {
+            bestDuration = duration
+            bestIndex = index
+        }
+    })
+
+    return bestIndex >= 0 ? bestIndex : 0
 }

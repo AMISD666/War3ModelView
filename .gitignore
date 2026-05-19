@@ -16,6 +16,13 @@ target/
 
 # Local-only vendored dependencies
 vendor/
+!vendor/
+vendor/*
+!vendor/war3-model/
+vendor/war3-model/*
+!vendor/war3-model/renderer/
+vendor/war3-model/renderer/*
+!vendor/war3-model/renderer/particles.ts
 
 # TypeScript / tool caches
 *.tsbuildinfo
@@ -61,6 +68,10 @@ scripts/*
 !scripts/check-pe2-xyquad-plane.mjs
 !scripts/check-ribbon-render-queue.mjs
 !scripts/check-mirror-save-geometry-integrity.mjs
+!scripts/check-renderer-node-collections.mjs
+!scripts/check-pe2-tail-rendering.mjs
+!scripts/check-retarget-mode-renderer-cache.mjs
+!scripts/check-keyframe-transform-tangents.mjs
 local-test-scripts/
 activation/
 

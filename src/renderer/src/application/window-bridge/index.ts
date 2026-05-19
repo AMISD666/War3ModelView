@@ -1,7 +1,10 @@
 export type { ResolveManagedWindow } from './WindowRpcTransport'
 export type { NodeEditorWindowSession } from './ToolWindowSessionRegistry'
 export type { OpenToolWindowOptions } from './ToolWindowLifecycleService'
-export type { KeyframeSavePayload } from './KeyframeEvents'
+export type {
+    KeyframeGlobalSequencesChangedPayload,
+    KeyframeSavePayload,
+} from './KeyframeEvents'
 export type { ToolWindowId, WindowSize } from './ToolWindowLayouts'
 export type {
     CreateNodeEditorStateInput,
@@ -129,7 +132,10 @@ export {
     getOrbitCameraViewFromModelCamera,
 } from './CameraViewportBridge'
 export { ToolWindowBroadcastCoordinator } from './ToolWindowBroadcastCoordinator'
-export { KEYFRAME_SAVE_EVENT } from './KeyframeEvents'
+export {
+    KEYFRAME_GLOBAL_SEQUENCES_CHANGED_EVENT,
+    KEYFRAME_SAVE_EVENT,
+} from './KeyframeEvents'
 export { toolWindowOrchestrator, ToolWindowOrchestrator } from './ToolWindowOrchestrator'
 export {
     GeosetAnimationCommandHandler,

@@ -6197,6 +6197,7 @@ dependencies = [
  "chrono",
  "clipboard-win",
  "ed25519-dalek",
+ "flate2",
  "image",
  "once_cell",
  "rand 0.8.5",

@@ -174,7 +174,7 @@ const CameraManagerModal: React.FC<CameraManagerModalProps> = ({ visible, onClos
             callerId: 'CameraManagerModal',
             initialData,
             title: `编辑 ${field}`,
-            vectorSize: 3,
+            vectorSize: field === 'Rotation' ? 4 : 3,
             fieldName: field,
             globalSequences: (modelData?.GlobalSequences || [])
                 .map((g: any) => (typeof g === 'number' ? g : g?.Duration))

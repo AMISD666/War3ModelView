@@ -1,6 +1,7 @@
 import { Command } from '../utils/CommandManager'
 import { weldVertices, WeldResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
+import { syncRendererGeosetBuffers } from '../application/render'
 
 interface VertexSelection {
     geosetIndex: number
@@ -61,10 +62,8 @@ export class WeldVerticesCommand implements Command {
         // Apply to geoset (only updates Vertices)
         if (this.weldResult.updatedGeoset.Vertices) {
             geoset.Vertices = this.weldResult.updatedGeoset.Vertices
-        }        // Update GPU buffer
-        if (this.renderer.updateGeosetVertices) {
-            this.renderer.updateGeosetVertices(this.geosetIndex, geoset.Vertices)
         }
+        syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], { vertices: true })
 
         // Sync to store
         this.syncToStore()
@@ -81,10 +80,7 @@ export class WeldVerticesCommand implements Command {
             geoset.Vertices[idx * 3 + 2] = pos[2]
         }
 
-        // Update GPU buffer
-        if (this.renderer.updateGeosetVertices) {
-            this.renderer.updateGeosetVertices(this.geosetIndex, geoset.Vertices)
-        }
+        syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], { vertices: true })
 
         // Sync to store
         this.syncToStore()

@@ -244,12 +244,18 @@ type ClassicModelRepairSummary = {
     versionFixed: boolean;
 };
 
+const UNBOUND_BONE_SENTINEL = 65535;
+
 function normalizeGroupIndices(group: any): number[] {
     const source = Array.isArray(group)
         ? group
         : Array.isArray(group?.matrices)
             ? group.matrices
-            : [];
+            : null;
+
+    if (!source) {
+        return [0];
+    }
 
     const seen = new Set<number>();
     const normalized: number[] = [];
@@ -263,7 +269,7 @@ function normalizeGroupIndices(group: any): number[] {
         normalized.push(index);
     }
 
-    return normalized.length > 0 ? normalized : [0];
+    return normalized;
 }
 
 /**
@@ -319,10 +325,16 @@ export function repairClassicModelData(model: any): ClassicModelRepairSummary {
         if (groups.length === 0 && vertexCount > 0) {
             groups = [[0]];
         }
+        const fallbackGroup = groups[0]?.length ? groups[0] : [0];
 
         const remap = new Map<number, number>();
         const compacted: number[][] = [];
         groups.forEach((group: number[], index: number) => {
+            if (group.length === 0) {
+                remap.set(index, 0);
+                summary.geosetGroupsClamped++;
+                return;
+            }
             const key = group.join(',');
             const existing = compacted.findIndex((candidate) => candidate.join(',') === key);
             if (existing >= 0) {
@@ -333,6 +345,9 @@ export function repairClassicModelData(model: any): ClassicModelRepairSummary {
             remap.set(index, nextIndex);
             compacted.push(group);
         });
+        if (compacted.length === 0 && vertexCount > 0) {
+            compacted.push(fallbackGroup);
+        }
 
         const maxClassicGroups = 256;
         if (compacted.length > maxClassicGroups) {
@@ -347,10 +362,17 @@ export function repairClassicModelData(model: any): ClassicModelRepairSummary {
                 return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0;
             }
         );
-        const normalizedVertexGroups = new Uint8Array(vertexCount);
+        const requiresWideVertexGroup = rawVertexGroups.some((value) => value === UNBOUND_BONE_SENTINEL || value >= maxClassicGroups);
+        const VertexGroupCtor = requiresWideVertexGroup ? Uint16Array : Uint8Array;
+        const normalizedVertexGroups = new VertexGroupCtor(vertexCount);
 
         for (let i = 0; i < vertexCount; i++) {
             const sourceGroup = rawVertexGroups[i] ?? 0;
+            if (sourceGroup === UNBOUND_BONE_SENTINEL) {
+                normalizedVertexGroups[i] = 0;
+                summary.geosetGroupsClamped++;
+                continue;
+            }
             let nextGroup = remap.get(sourceGroup);
             if (nextGroup === undefined) {
                 nextGroup = sourceGroup < compacted.length ? sourceGroup : 0;
@@ -368,7 +390,7 @@ export function repairClassicModelData(model: any): ClassicModelRepairSummary {
             compacted.length !== geoset.Groups.length ||
             totalGroupsCount !== geoset.TotalGroupsCount;
         const vertexGroupChanged =
-            !(geoset.VertexGroup instanceof Uint8Array) ||
+            !(geoset.VertexGroup instanceof VertexGroupCtor) ||
             geoset.VertexGroup.length !== normalizedVertexGroups.length ||
             rawVertexGroups.some((value, index) => normalizedVertexGroups[index] !== value);
 

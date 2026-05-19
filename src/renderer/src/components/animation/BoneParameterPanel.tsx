@@ -10,6 +10,7 @@ import { SetNodeParentCommand } from '../../commands/SetNodeParentCommand'
 import { useCommandManager } from '../../utils/CommandManager'
 import { GlobalSequenceSelect } from '../common/GlobalSequenceSelect'
 import { markNodeManagerListScrollFromTree } from '../../utils/nodeManagerListScrollBridge'
+import { collectBoundNodeIds } from '../../utils/boneBindingSelection'
 
 const { Text } = Typography
 
@@ -234,21 +235,16 @@ const BoneParameterPanel: React.FC = () => {
     const boundBones = useMemo(() => {
         if (!modelData || !modelData.Geosets || selectedVertexIds.length === 0) return []
         const boneMap = new Map<number, string>()
-        selectedVertexIds.forEach(sel => {
-            const geoset = modelData.Geosets![sel.geosetIndex]
-            if (!geoset || !geoset.VertexGroup || !geoset.Groups) return
-            const matrixGroupIndex = geoset.VertexGroup[sel.index]
-            if (matrixGroupIndex === undefined || matrixGroupIndex < 0 || matrixGroupIndex >= geoset.Groups.length) return
-            const matrixGroup = geoset.Groups[matrixGroupIndex] as any
-            if (matrixGroup && Array.isArray(matrixGroup)) {
-                matrixGroup.forEach((nodeIndex: number) => {
-                    const node = safeNodes.find((n: any) => n && n.ObjectId === nodeIndex)
-                    if (node) boneMap.set(nodeIndex, node.Name)
-                })
+        collectBoundNodeIds(modelData, selectedVertexIds).forEach((nodeIndex) => {
+            const node = safeNodes.find((n: any) => n && n.ObjectId === nodeIndex)
+            if (node) {
+                boneMap.set(nodeIndex, node.Name)
             }
         })
         return Array.from(boneMap.entries()).map(([index, name]) => ({ index, name }))
     }, [modelData, safeNodes, selectedVertexIds])
+
+    const boundBoneIdSet = useMemo(() => new Set(boundBones.map((bone) => bone.index)), [boundBones])
 
     // 插值数据
     const translationLocal = useMemo(() => {
@@ -822,12 +818,26 @@ const BoneParameterPanel: React.FC = () => {
                                         markNodeManagerListScrollFromTree()
                                         selectNodes([bone.index])
                                     }}
+                                        title={boundBoneIdSet.has(bone.index) ? '当前选中顶点绑定的骨骼' : undefined}
                                         style={{
                                             padding: '6px 8px', cursor: 'pointer', fontSize: '12px', marginBottom: 2, borderRadius: 2, display: 'flex', alignItems: 'center',
-                                            backgroundColor: selectedNodeIds.includes(bone.index) ? 'rgba(24, 144, 255, 0.3)' : 'transparent',
-                                            border: selectedNodeIds.includes(bone.index) ? '1px solid #1890ff' : '1px solid transparent',
+                                            backgroundColor: selectedNodeIds.includes(bone.index)
+                                                ? 'rgba(24, 144, 255, 0.3)'
+                                                : (boundBoneIdSet.has(bone.index) ? 'rgba(255, 77, 79, 0.18)' : 'transparent'),
+                                            border: selectedNodeIds.includes(bone.index)
+                                                ? '1px solid #1890ff'
+                                                : (boundBoneIdSet.has(bone.index) ? '1px solid rgba(255, 77, 79, 0.8)' : '1px solid transparent'),
                                         }}>
-                                        <span style={{ width: 8, height: 8, borderRadius: '50%', marginRight: 8, display: 'inline-block', backgroundColor: selectedNodeIds.includes(bone.index) ? '#1890ff' : '#52c41a' }} />
+                                        <span style={{
+                                            width: 8,
+                                            height: 8,
+                                            borderRadius: '50%',
+                                            marginRight: 8,
+                                            display: 'inline-block',
+                                            backgroundColor: selectedNodeIds.includes(bone.index)
+                                                ? '#1890ff'
+                                                : (boundBoneIdSet.has(bone.index) ? '#ff4d4f' : '#52c41a')
+                                        }} />
                                         {bone.name}
                                     </div>
                                 ))}

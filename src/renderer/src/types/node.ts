@@ -4,6 +4,13 @@
 
 import React from 'react';
 
+export interface ScalarAnimTrack {
+    LineType: number;
+    InterpolationType?: number;
+    GlobalSeqId?: number | null;
+    Keys: Array<{ Frame: number; Vector: Float32Array }>;
+}
+
 // 节点类型枚举
 export enum NodeType {
     BONE = 'Bone',
@@ -110,13 +117,13 @@ export interface ParticleEmitterNode extends BaseNode {
 export interface ParticleEmitter2Node extends BaseNode {
     type: NodeType.PARTICLE_EMITTER_2;
     // 基础属性
-    EmissionRate?: number;
-    Speed?: number;
-    Variation?: number;
-    Width?: number;
-    Length?: number;
-    Gravity?: number;
-    Latitude?: number;
+    EmissionRate?: number | ScalarAnimTrack;
+    Speed?: number | ScalarAnimTrack;
+    Variation?: number | ScalarAnimTrack;
+    Width?: number | ScalarAnimTrack;
+    Length?: number | ScalarAnimTrack;
+    Gravity?: number | ScalarAnimTrack;
+    Latitude?: number | ScalarAnimTrack;
     LifeSpan?: number; // 这里的 LifeSpan 可能是指 Time? War3 中通常有 LifeSpan 和 Time
     Time?: number; // 中间那个 "Time" (0.5)
 
@@ -160,6 +167,7 @@ export interface ParticleEmitter2Node extends BaseNode {
     WidthAnim?: any;
     LengthAnim?: any;
     GravityAnim?: any;
+    Visibility?: number | ScalarAnimTrack;
     VisibilityAnim?: any;
 }
 

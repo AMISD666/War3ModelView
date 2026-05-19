@@ -32,6 +32,7 @@ import { createImageDataUrlFromBytes } from '../../infrastructure/texture'
 import { decodeTextureData } from '../viewer/textureLoader'
 import { createSelectionRect, pointInRect, segmentIntersectsRect, triangleIntersectsRect } from './uvSelectionUtils'
 import { useUvEditorStore } from '../../store/uvEditorStore'
+import { syncRendererGeosetBuffers } from '../../application/render'
 import {
     areUVSelectionsEqual,
     buildUVSelectionsFromModelSelection,
@@ -364,7 +365,7 @@ const UVEditor: React.FC<UVEditorProps> = ({
             rendererGeoset.__sourceTVerticesRef = uvs
         }
 
-        renderer?.updateGeosetTexCoords?.(geosetIndex, uvs)
+        syncRendererGeosetBuffers(renderer, [geosetIndex], { texCoords: true })
     }, [])
 
     const syncToStore = useCallback(() => {

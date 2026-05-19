@@ -22,6 +22,34 @@ import {
 } from './saveDataSections'
 import { normalizeMaterialForSave } from './normalizeMaterialLayersForSave'
 
+const UNBOUND_BONE_SENTINEL = 65535
+
+const normalizeUnboundVertexGroupsForClassicSave = (geoset: any, vertexCount: number): void => {
+    if (!geoset?.VertexGroup || !Array.isArray(geoset.Groups)) return
+
+    const values = Array.from(geoset.VertexGroup as ArrayLike<number>)
+    const hasUnboundVertices = values
+        .slice(0, vertexCount)
+        .some((value) => Math.floor(Number(value)) === UNBOUND_BONE_SENTINEL)
+
+    if (!hasUnboundVertices) return
+
+    const nextValues = Array.from(
+        values,
+        (value, index) => {
+            if (index >= vertexCount) return 0
+            const num = Number(value)
+            if (!Number.isFinite(num) || num < 0) return 0
+            const normalized = Math.floor(num)
+            return normalized === UNBOUND_BONE_SENTINEL ? 0 : normalized
+        }
+    )
+
+    const maxValue = nextValues.reduce((max, value) => Math.max(max, value), 0)
+    const VertexGroupCtor = maxValue > 255 ? Uint16Array : Uint8Array
+    geoset.VertexGroup = new VertexGroupCtor(nextValues)
+}
+
 /**
  * Normalize model data before saving to ensure typed arrays are correct.
  * The war3-model library expects Uint32Array for Intervals and Float32Array for extents,
@@ -793,27 +821,43 @@ export function prepareModelDataForSave(modelData: any): any {
             if (geoset.TotalGroupsCount !== totalCount) {                geoset.TotalGroupsCount = totalCount;
             }
 
-            const maxGroupIndex = Math.max(0, geoset.Groups.length - 1);
-            const VertexGroupCtor = maxGroupIndex > 255 ? Uint16Array : Uint8Array;
+            let maxGroupIndex = Math.max(0, geoset.Groups.length - 1);
+            const rawVertexGroupValues = Array.from(
+                geoset.VertexGroup as unknown as ArrayLike<number> ?? { length: 0 },
+                (value) => {
+                    const num = Number(value)
+                    return Number.isFinite(num) && num >= 0 ? Math.floor(num) : 0
+                }
+            )
+            const requiresWideVertexGroup =
+                maxGroupIndex > 255
+                || rawVertexGroupValues.some((value) => value === UNBOUND_BONE_SENTINEL || value > 255)
+            const VertexGroupCtor = requiresWideVertexGroup ? Uint16Array : Uint8Array;
 
             // Ensure VertexGroup exists and uses a wide-enough integer type
             if (!geoset.VertexGroup) {
                 geoset.VertexGroup = new VertexGroupCtor(vertexCount);
             } else if (!(geoset.VertexGroup instanceof VertexGroupCtor)) {
-                geoset.VertexGroup = new VertexGroupCtor(Array.from(geoset.VertexGroup as unknown as ArrayLike<number>, (value) => Number(value) || 0));
+                geoset.VertexGroup = new VertexGroupCtor(rawVertexGroupValues);
             }
             if (geoset.VertexGroup.length !== vertexCount) {
                 const fixed = new VertexGroupCtor(vertexCount);
                 fixed.set(geoset.VertexGroup.subarray(0, vertexCount));
                 geoset.VertexGroup = fixed;
             }
+            normalizeUnboundVertexGroupsForClassicSave(geoset, vertexCount)
+            maxGroupIndex = Math.max(0, geoset.Groups.length - 1)
             if (maxGroupIndex >= 0) {
                 for (let i = 0; i < geoset.VertexGroup.length; i++) {
-                    if (geoset.VertexGroup[i] > maxGroupIndex) {
+                    if (geoset.VertexGroup[i] !== UNBOUND_BONE_SENTINEL && geoset.VertexGroup[i] > maxGroupIndex) {
                         geoset.VertexGroup[i] = 0;
                     }
                 }
             }
+
+            geoset.TotalGroupsCount = geoset.Groups.reduce((sum: number, group: any) => {
+                return sum + (Array.isArray(group) ? group.length : 0);
+            }, 0);
 
             // MaterialID bounds
             if (typeof geoset.MaterialID !== 'number' || geoset.MaterialID < 0 || (materialCount > 0 && geoset.MaterialID >= materialCount)) {

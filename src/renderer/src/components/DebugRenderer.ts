@@ -138,6 +138,7 @@ export class DebugRenderer {
         pMatrix: mat4,
         nodes: NodeWrapper[],
         selectedNodeIds: number[] = [],
+        highlightedNodeIds: number[] = [],
         parentOfSelected: number | null = null,
         childrenOfSelected: number[] = [],
         typeColors?: Record<string, number[]>,
@@ -206,6 +207,9 @@ export class DebugRenderer {
         const tempNormal = vec3.create()
         const normalMatrix = mat3.create()
         const noScaleMatrix = mat4.create()
+        const selectedNodeIdSet = new Set(selectedNodeIds)
+        const highlightedNodeIdSet = new Set(highlightedNodeIds)
+        const childNodeIdSet = new Set(childrenOfSelected)
 
         const getNoScaleMatrix = (src: Float32Array | mat4) => {
             mat4.copy(noScaleMatrix, src as mat4)
@@ -230,6 +234,84 @@ export class DebugRenderer {
             return noScaleMatrix
         }
 
+        const renderOutlineCube = (nodeMatrix: Float32Array | mat4, pivot: ArrayLike<number>, outlineSize: number, color: number[]) => {
+            if (!this.program || !this.buffer) {
+                return
+            }
+
+            const os = outlineSize
+            const outlineCubeVerts = [
+                -os, -os, os, os, -os, os, os, os, os,
+                -os, -os, os, os, os, os, -os, os, os,
+                os, -os, -os, -os, -os, -os, -os, os, -os,
+                os, -os, -os, -os, os, -os, os, os, -os,
+                -os, os, os, os, os, os, os, os, -os,
+                -os, os, os, os, os, -os, -os, os, -os,
+                -os, -os, -os, os, -os, -os, os, -os, os,
+                -os, -os, -os, os, -os, os, -os, -os, os,
+                os, -os, os, os, -os, -os, os, os, -os,
+                os, -os, os, os, os, -os, os, os, os,
+                -os, -os, -os, -os, -os, os, -os, os, os,
+                -os, -os, -os, -os, os, os, -os, os, -os,
+            ]
+            const outlineTransformed: number[] = []
+            for (let i = 0; i < outlineCubeVerts.length; i += 3) {
+                vec3.set(tempVec, outlineCubeVerts[i] + pivot[0], outlineCubeVerts[i + 1] + pivot[1], outlineCubeVerts[i + 2] + pivot[2])
+                vec3.transformMat4(tempVec, tempVec, nodeMatrix)
+                outlineTransformed.push(tempVec[0], tempVec[1], tempVec[2])
+            }
+            gl.useProgram(this.program)
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(outlineTransformed), gl.DYNAMIC_DRAW)
+            gl.enableVertexAttribArray(this.aPosition)
+            gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
+            gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
+            gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
+            gl.uniform4fv(this.uColor, color)
+            gl.uniform1f(this.uPointSize, 1.0)
+            gl.uniform1f(this.uDepthBias, 0.0)
+            gl.drawArrays(gl.TRIANGLES, 0, 36)
+        }
+
+        const renderOutlineWireframe = (nodeMatrix: Float32Array | mat4, pivot: ArrayLike<number>, outlineSize: number, color: number[]) => {
+            if (!this.program || !this.buffer) {
+                return
+            }
+
+            const ows = outlineSize
+            const outlineLines = [
+                -ows, -ows, -ows, ows, -ows, -ows,
+                ows, -ows, -ows, ows, ows, -ows,
+                ows, ows, -ows, -ows, ows, -ows,
+                -ows, ows, -ows, -ows, -ows, -ows,
+                -ows, -ows, ows, ows, -ows, ows,
+                ows, -ows, ows, ows, ows, ows,
+                ows, ows, ows, -ows, ows, ows,
+                -ows, ows, ows, -ows, -ows, ows,
+                -ows, -ows, -ows, -ows, -ows, ows,
+                ows, -ows, -ows, ows, -ows, ows,
+                ows, ows, -ows, ows, ows, ows,
+                -ows, ows, -ows, -ows, ows, ows,
+            ]
+            const transformedLines: number[] = []
+            for (let i = 0; i < outlineLines.length; i += 3) {
+                vec3.set(tempVec, outlineLines[i] + pivot[0], outlineLines[i + 1] + pivot[1], outlineLines[i + 2] + pivot[2])
+                vec3.transformMat4(tempVec, tempVec, nodeMatrix)
+                transformedLines.push(tempVec[0], tempVec[1], tempVec[2])
+            }
+            gl.useProgram(this.program)
+            gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(transformedLines), gl.DYNAMIC_DRAW)
+            gl.enableVertexAttribArray(this.aPosition)
+            gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
+            gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
+            gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
+            gl.uniform4fv(this.uColor, color)
+            gl.uniform1f(this.uPointSize, 1.0)
+            gl.uniform1f(this.uDepthBias, 0.0)
+            gl.drawArrays(gl.LINES, 0, transformedLines.length / 3)
+        }
+
         for (const node of nodes) {
             if (!node.node.PivotPoint || !node.matrix) continue
             if ((node.node as any).type === 'Attachment') continue
@@ -249,11 +331,13 @@ export class DebugRenderer {
             }
 
             let color: number[]
-            if (selectedNodeIds.includes(node.node.ObjectId)) {
+            if (selectedNodeIdSet.has(node.node.ObjectId)) {
                 color = [1.0, 0.3, 0.3, 1]
+            } else if (highlightedNodeIdSet.has(node.node.ObjectId)) {
+                color = [1.0, 0.15, 0.15, 1]
             } else if (node.node.ObjectId === parentOfSelected) {
                 color = [1.0, 0.6, 0.0, 1]
-            } else if (childrenOfSelected.includes(node.node.ObjectId)) {
+            } else if (childNodeIdSet.has(node.node.ObjectId)) {
                 color = [1.0, 1.0, 0.3, 1]
             } else {
                 const colorMap = typeColors || fallbackColors
@@ -262,8 +346,12 @@ export class DebugRenderer {
 
             const nodeMatrix = ignoreScale ? getNoScaleMatrix(node.matrix) : node.matrix
             const pivot = node.node.PivotPoint
+            const isBindingHighlight = highlightedNodeIdSet.has(node.node.ObjectId) && !selectedNodeIdSet.has(node.node.ObjectId)
 
             if (renderMode === 'wireframe' && this.program && this.buffer) {
+                if (isBindingHighlight) {
+                    renderOutlineWireframe(nodeMatrix, pivot, wireframeCubeSize * 1.24, [1.0, 1.0, 1.0, 1.0])
+                }
                 const transformedLines: number[] = []
                 for (let i = 0; i < baseWireframeLines.length; i += 3) {
                     vec3.set(tempVec, baseWireframeLines[i] + pivot[0], baseWireframeLines[i + 1] + pivot[1], baseWireframeLines[i + 2] + pivot[2])
@@ -300,41 +388,13 @@ export class DebugRenderer {
                 transformedNormals.push(tempNormal[0], tempNormal[1], tempNormal[2])
             }
 
-            const isParentOrChild = node.node.ObjectId === parentOfSelected || childrenOfSelected.includes(node.node.ObjectId)
+            const isParentOrChild = node.node.ObjectId === parentOfSelected || childNodeIdSet.has(node.node.ObjectId)
+            if (isBindingHighlight) {
+                renderOutlineCube(nodeMatrix, pivot, cubeSize * 1.2, [1.0, 1.0, 1.0, 1.0])
+                gl.useProgram(this.cubeProgram)
+            }
             if (isParentOrChild && this.program) {
-                const outlineSize = cubeSize * 1.1
-                const os = outlineSize
-                const outlineCubeVerts = [
-                    -os, -os, os, os, -os, os, os, os, os,
-                    -os, -os, os, os, os, os, -os, os, os,
-                    os, -os, -os, -os, -os, -os, -os, os, -os,
-                    os, -os, -os, -os, os, -os, os, os, -os,
-                    -os, os, os, os, os, os, os, os, -os,
-                    -os, os, os, os, os, -os, -os, os, -os,
-                    -os, -os, -os, os, -os, -os, os, -os, os,
-                    -os, -os, -os, os, -os, os, -os, -os, os,
-                    os, -os, os, os, -os, -os, os, os, -os,
-                    os, -os, os, os, os, -os, os, os, os,
-                    -os, -os, -os, -os, -os, os, -os, os, os,
-                    -os, -os, -os, -os, os, os, -os, os, -os,
-                ]
-                const outlineTransformed: number[] = []
-                for (let i = 0; i < outlineCubeVerts.length; i += 3) {
-                    vec3.set(tempVec, outlineCubeVerts[i] + pivot[0], outlineCubeVerts[i + 1] + pivot[1], outlineCubeVerts[i + 2] + pivot[2])
-                    vec3.transformMat4(tempVec, tempVec, nodeMatrix)
-                    outlineTransformed.push(tempVec[0], tempVec[1], tempVec[2])
-                }
-                gl.useProgram(this.program)
-                gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer)
-                gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(outlineTransformed), gl.DYNAMIC_DRAW)
-                gl.enableVertexAttribArray(this.aPosition)
-                gl.vertexAttribPointer(this.aPosition, 3, gl.FLOAT, false, 0, 0)
-                gl.uniformMatrix4fv(this.uMVMatrix, false, mvMatrix)
-                gl.uniformMatrix4fv(this.uPMatrix, false, pMatrix)
-                gl.uniform4fv(this.uColor, [0.0, 1.0, 1.0, 1.0])
-                gl.uniform1f(this.uPointSize, 1.0)
-                gl.uniform1f(this.uDepthBias, 0.0)
-                gl.drawArrays(gl.TRIANGLES, 0, 36)
+                renderOutlineCube(nodeMatrix, pivot, cubeSize * 1.1, [0.0, 1.0, 1.0, 1.0])
                 gl.useProgram(this.cubeProgram)
             }
 

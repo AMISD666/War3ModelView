@@ -4,11 +4,20 @@ import { PlusOutlined } from '@ant-design/icons';
 import { PositiveStepInput } from './PositiveStepInput';
 import { useModelStore } from '../../store/modelStore';
 import { useRpcClient } from '../../hooks/useRpc';
+import { useGlobalSequenceSync } from '../../hooks/useGlobalSequenceSync';
+import {
+    createGlobalSequenceSavePayload,
+    normalizeGlobalSequenceDurations,
+} from '../../application/window-bridge/GlobalSequenceCommandPayload';
 
 interface GlobalSequenceSelectProps {
     value: number | null;
     onChange: (val: number | null) => void;
     isStandalone?: boolean;
+    documentId?: string | null;
+    documentRevision?: number;
+    globalSequences?: number[];
+    onGlobalSequencesChange?: (sequences: number[]) => void;
     style?: React.CSSProperties;
     size?: 'small' | 'middle' | 'large';
     placeholder?: string;
@@ -18,6 +27,10 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
     value,
     onChange,
     isStandalone,
+    documentId,
+    documentRevision,
+    globalSequences,
+    onGlobalSequencesChange,
     style,
     size = 'small',
     placeholder = '选择全局序列'
@@ -27,7 +40,6 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
     // Fine-grained updater — does NOT trigger full model reload
     const updateGlobalSequences = useModelStore(state => state.updateGlobalSequences);
     const modelData = useModelStore(state => state.modelData);
-
     // Access RPC for standalone windows
     const { state: rpcState, emitCommand } = useRpcClient<{
         documentId: string | null
@@ -37,13 +49,17 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
         'globalSequenceManager',
         { documentId: null, documentRevision: 0, globalSequences: [] }
     );
+    const syncedGlobalSequences = useGlobalSequenceSync({
+        documentId: documentId ?? rpcState.documentId,
+        documentRevision: documentRevision ?? rpcState.documentRevision,
+        globalSequences: globalSequences ?? rpcState.globalSequences,
+    });
 
     // Resolve sequences based on current environment
-    const rawSeqs = isStandalone ? (rpcState.globalSequences || []) : ((modelData as any)?.GlobalSequences || []);
-    // Support both simple number arrays and potential future object-based sequences
-    const sequences: number[] = Array.isArray(rawSeqs)
-        ? rawSeqs.map((s: any) => typeof s === 'number' ? s : (s.Duration || 1000))
-        : [];
+    const rawSeqs = isStandalone
+        ? (syncedGlobalSequences.globalSequences ?? globalSequences ?? rpcState.globalSequences ?? [])
+        : ((modelData as any)?.GlobalSequences || []);
+    const sequences = normalizeGlobalSequenceDurations(rawSeqs);
 
     const options = [
         { label: '(空)', value: -1 },
@@ -54,17 +70,23 @@ export const GlobalSequenceSelect: React.FC<GlobalSequenceSelectProps> = ({
     ];
 
     const saveSequences = (newSeqs: number[]) => {
+        const normalizedSeqs = normalizeGlobalSequenceDurations(newSeqs);
+        syncedGlobalSequences.replaceGlobalSequences(normalizedSeqs);
+        onGlobalSequencesChange?.(normalizedSeqs);
         if (isStandalone) {
-            emitCommand('EXECUTE_GLOBAL_SEQ_ACTION', {
-                action: 'SAVE',
-                documentId: rpcState.documentId,
-                baseDocumentRevision: rpcState.documentRevision,
-                stalePolicy: 'warn',
-                globalSequences: newSeqs,
-            });
+            const commandDocumentId = syncedGlobalSequences.documentId !== undefined ? syncedGlobalSequences.documentId : rpcState.documentId;
+            const commandDocumentRevision = syncedGlobalSequences.documentRevision !== undefined ? syncedGlobalSequences.documentRevision : rpcState.documentRevision;
+            emitCommand(
+                'EXECUTE_GLOBAL_SEQ_ACTION',
+                createGlobalSequenceSavePayload({
+                    documentId: commandDocumentId,
+                    documentRevision: commandDocumentRevision,
+                    durations: normalizedSeqs,
+                }),
+            );
         } else {
             // Use targeted update — no full model reload, no side-effects
-            updateGlobalSequences(newSeqs);
+            updateGlobalSequences(normalizedSeqs);
         }
     };
 

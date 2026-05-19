@@ -4,6 +4,7 @@
  */
 
 import { vec3 } from 'gl-matrix'
+import { useRendererStore } from '../store/rendererStore'
 
 const getVertexCount = (vertices: unknown): number => {
     if (!vertices || typeof (vertices as { length?: unknown }).length !== 'number') return 0
@@ -181,6 +182,8 @@ export function recalculateGeosetNormals(
     // Update GPU buffer if the method exists
     if (typeof renderer.updateGeosetNormals === 'function') {
         renderer.updateGeosetNormals(geosetIndex, newNormals)
+        renderer.update?.(0)
+        useRendererStore.getState().bumpVertexRenderRevision()
     } else {    }
 }
 

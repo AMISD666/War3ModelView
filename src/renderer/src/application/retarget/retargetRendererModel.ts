@@ -1,5 +1,7 @@
 import { deepClone } from '../../utils/modelMerge'
 
+const UNBOUND_BONE_SENTINEL = 65535
+
 const REFERENCE_BLEND_MODES = new Set(['Blend', 'Transparent', 'AddAlpha', 1, 2, 4])
 
 const sanitizeLayer = (layer: any, textureCount: number): any => {
@@ -101,7 +103,7 @@ const ensureGeosetGroups = (model: any, defaultNodeId: number): void => {
 
         const maxGroupIndex = geoset.Groups.length - 1
         for (let index = 0; index < geoset.VertexGroup.length; index += 1) {
-            if (geoset.VertexGroup[index] > maxGroupIndex) {
+            if (geoset.VertexGroup[index] !== UNBOUND_BONE_SENTINEL && geoset.VertexGroup[index] > maxGroupIndex) {
                 geoset.VertexGroup[index] = 0
             }
         }

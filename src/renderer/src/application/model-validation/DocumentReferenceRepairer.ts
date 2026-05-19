@@ -27,6 +27,9 @@ const cloneModelData = <T,>(modelData: T): T => {
 const isInteger = (value: unknown): value is number =>
     typeof value === 'number' && Number.isInteger(value)
 
+const isAnimTrack = (value: unknown): value is { Keys?: unknown[]; GlobalSeqId?: unknown } =>
+    value !== null && typeof value === 'object' && Array.isArray((value as { Keys?: unknown[] }).Keys)
+
 const pushRepair = (repairs: DocumentReferenceRepair[], path: string, message: string): void => {
     repairs.push({ path, message })
 }
@@ -140,6 +143,50 @@ const repairLayerTextureAnimId = (
     })
 }
 
+const repairGlobalSeqId = (
+    repairs: DocumentReferenceRepair[],
+    track: Record<string, unknown>,
+    path: string,
+    globalSequenceCount: number,
+): void => {
+    const value = track.GlobalSeqId
+    if (value === undefined || value === null) return
+    if (value === -1) {
+        track.GlobalSeqId = null
+        pushRepair(repairs, `${path}.GlobalSeqId`, 'Normalized sentinel GlobalSeqId -1 to null')
+        return
+    }
+    if (!isInteger(value)) {
+        track.GlobalSeqId = null
+        pushRepair(repairs, `${path}.GlobalSeqId`, `Cleared non-integer GlobalSequences reference ${String(value)}`)
+        return
+    }
+    if (value < 0 || value >= globalSequenceCount) {
+        track.GlobalSeqId = null
+        pushRepair(repairs, `${path}.GlobalSeqId`, `Cleared out-of-range GlobalSequences reference ${value} (count=${globalSequenceCount})`)
+    }
+}
+
+const repairTracksInObject = (
+    repairs: DocumentReferenceRepair[],
+    path: string,
+    value: unknown,
+    globalSequenceCount: number,
+): void => {
+    if (value === null || typeof value !== 'object') return
+
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+        const nextPath = `${path}.${key}`
+        if (isAnimTrack(nested)) {
+            repairGlobalSeqId(repairs, nested as Record<string, unknown>, nextPath, globalSequenceCount)
+            continue
+        }
+        if (nested !== null && typeof nested === 'object' && !ArrayBuffer.isView(nested)) {
+            repairTracksInObject(repairs, nextPath, nested, globalSequenceCount)
+        }
+    }
+}
+
 export const repairDocumentReferences = <T,>(modelData: T): DocumentReferenceRepairResult<T> => {
     if (!modelData) {
         return { modelData, repairs: [] }
@@ -153,6 +200,7 @@ export const repairDocumentReferences = <T,>(modelData: T): DocumentReferenceRep
     const materials = asArray(data.Materials).map(asRecord)
     const textures = asArray(data.Textures)
     const textureAnims = asArray(data.TextureAnims)
+    const globalSequenceCount = asArray(data.GlobalSequences).length
 
     if (Array.isArray(data.GeosetAnims)) {
         const usedGeosetIds = new Set<number>()
@@ -212,6 +260,7 @@ export const repairDocumentReferences = <T,>(modelData: T): DocumentReferenceRep
                 repairTextureReference(repairs, layer, key, `${layerPath}.${key}`, textures.length)
             }
             repairLayerTextureAnimId(repairs, layer, `${layerPath}.TVertexAnimId`, textureAnims.length)
+            repairTracksInObject(repairs, layerPath, layer, globalSequenceCount)
         })
     })
 
@@ -235,7 +284,16 @@ export const repairDocumentReferences = <T,>(modelData: T): DocumentReferenceRep
                     allowNegative: true,
                 })
             }
+            repairTracksInObject(repairs, nodePath, node, globalSequenceCount)
         })
+    })
+
+    textureAnims.forEach((textureAnim, index) => {
+        repairTracksInObject(repairs, `TextureAnims[${index}]`, textureAnim, globalSequenceCount)
+    })
+
+    geosetAnims.forEach((geosetAnim, index) => {
+        repairTracksInObject(repairs, `GeosetAnims[${index}]`, geosetAnim, globalSequenceCount)
     })
 
     return { modelData: repaired, repairs }
