@@ -4754,6 +4754,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
 
             // Store original geoset alphas to restore later
             const originalGeosetAlphas: Map<number, number> = new Map();
+            const originalLayerAlphas: Array<{ layer: { Alpha?: unknown }; alpha: unknown }> = [];
             const numGeosets = mdlRenderer.model.Geosets?.length || 0;
 
             if (mdlRenderer.rendererData.geosetAlpha) {
@@ -4765,11 +4766,35 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             // Apply visibility consistently in every viewer mode.
             if (mdlRenderer.rendererData.geosetAlpha) {
               for (let i = 0; i < numGeosets; i++) {
+                if (isResetPoseMode && currentMainMode === "view" && isCurrentGeosetVisible(i)) {
+                  mdlRenderer.rendererData.geosetAlpha[i] = 1;
+                  continue;
+                }
                 if (!isCurrentGeosetVisible(i)) {
                   mdlRenderer.rendererData.geosetAlpha[i] = 0;
                 }
               }
             }
+            if (isResetPoseMode && currentMainMode === "view" && Array.isArray(mdlRenderer.model.Materials)) {
+              for (const material of mdlRenderer.model.Materials) {
+                const layers = Array.isArray(material?.Layers) ? material.Layers : [];
+                for (const layer of layers) {
+                  if (!layer || layer.Alpha === undefined || layer.Alpha === null) continue;
+                  originalLayerAlphas.push({ layer, alpha: layer.Alpha });
+                  layer.Alpha = 1;
+                }
+              }
+            }
+            const restoreModelPreviewAlphas = () => {
+              if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
+                originalGeosetAlphas.forEach((alpha, index) => {
+                  mdlRenderer.rendererData.geosetAlpha[index] = alpha;
+                });
+              }
+              for (const { layer, alpha } of originalLayerAlphas) {
+                layer.Alpha = alpha;
+              }
+            };
 
             const hiddenNodeIds = useRendererStore.getState().hiddenNodeIds;
             const hiddenNodeIdSet = hiddenNodeIds.length > 0 ? new Set(hiddenNodeIds) : null;
@@ -4914,6 +4939,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
             }
 
             if (mainSceneRenderFailed) {
+              restoreModelPreviewAlphas();
               sceneMs = performance.now() - sceneStageStart;
               overlayStageStart = performance.now();
               finishFailedModelRenderFrame({ axisIndicator: axisIndicator.current, canvas, cameraMs, clearMs, currentAnimationSubMode, currentMainMode, frameCount, framePerfStart, gl, lastFpsTime, mvMatrix: baseMvMatrix || mvMatrix, overlayStageStart, pMatrix, recordFramePerfSample, sceneMs, setFps, stateMs, time, transformMode: transformMode || "none", updateMs, playing: isPlayingRef.current });
@@ -4961,12 +4987,8 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
               }
             }
 
-            // Restore original geoset alphas
-            if (originalGeosetAlphas.size > 0 && mdlRenderer.rendererData.geosetAlpha) {
-              originalGeosetAlphas.forEach((alpha, index) => {
-                mdlRenderer.rendererData.geosetAlpha[index] = alpha;
-              });
-            }
+            // Restore original preview alphas before overlay rendering.
+            restoreModelPreviewAlphas();
             sceneMs = performance.now() - sceneStageStart;
             overlayStageStart = performance.now();
 

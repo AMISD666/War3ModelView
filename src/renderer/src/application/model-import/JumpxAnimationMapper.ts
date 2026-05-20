@@ -23,7 +23,12 @@ export const jumpxAnimationKeyFrame = (
     key: { frame: number; timeMs?: number },
     framesPerSecond: number,
     sourceStartFrame = 0,
-): number => frameToMs(Number(key.frame) - sourceStartFrame, framesPerSecond)
+): number => {
+    if (Number.isFinite(key.timeMs)) {
+        return Math.round(Number(key.timeMs))
+    }
+    return frameToMs(Number(key.frame) - sourceStartFrame, framesPerSecond)
+}
 
 const makeTrack = (keys: Array<{ frame: number; vector: Float32Array }>, lineType = JUMPX_TRACK_LINE_TYPE_DONT_INTERP): War3Track | null => {
     const sorted = keys

@@ -40,7 +40,9 @@ const keyFrame = (key: { frame: number; timeMs?: number }): number =>
     Number.isFinite(key.timeMs) ? Math.round(Number(key.timeMs)) : Math.round(Number(key.frame))
 
 const normalizedSampleFrame = (key: { frame: number; timeMs?: number }): number =>
-    Math.round((Math.max(0, Number(key.frame) - DEFAULT_JUMPX_START_FRAME) / DEFAULT_JUMPX_FPS) * 1000)
+    Number.isFinite(key.timeMs)
+        ? Math.round(Number(key.timeMs))
+        : Math.round((Math.max(0, Number(key.frame) - DEFAULT_JUMPX_START_FRAME) / DEFAULT_JUMPX_FPS) * 1000)
 
 const sampleVecValue = (key: TextureAnimSampleKey, axis: 0 | 1): number =>
     Array.isArray(key.value) ? Number(key.value[axis]) : 0
@@ -191,8 +193,16 @@ const buildTextureAnimTranslation = (
             ? alphaKeys
             : colorKeys
     const fallbackSampleKeys: TextureAnimSampleKey[] = [
-        { frame: DEFAULT_JUMPX_START_FRAME, value: [0, 0, 0] },
-        { frame: DEFAULT_JUMPX_START_FRAME + Math.max(1, material.sampleCount - 1), value: [0, 0, 0] },
+        {
+            frame: DEFAULT_JUMPX_START_FRAME,
+            timeMs: (DEFAULT_JUMPX_START_FRAME / DEFAULT_JUMPX_FPS) * 1000,
+            value: [0, 0, 0],
+        },
+        {
+            frame: DEFAULT_JUMPX_START_FRAME + Math.max(1, material.sampleCount - 1),
+            timeMs: ((DEFAULT_JUMPX_START_FRAME + Math.max(1, material.sampleCount - 1)) / DEFAULT_JUMPX_FPS) * 1000,
+            value: [0, 0, 0],
+        },
     ]
     const sampleKeys = sourceKeys.length > 0
         ? sourceKeys
