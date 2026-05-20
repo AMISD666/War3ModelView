@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import * as esbuild from 'esbuild'
+import { quat, vec3 } from 'gl-matrix'
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
 const distPath = fs.mkdtempSync(path.join(os.tmpdir(), 'war3modelview-jumpx-pe2-check-'))
@@ -16,6 +17,19 @@ const close = (actual, expected, label) => {
     if (Math.abs(actual - expected) > 1e-6) {
         fail(`${label} mismatch: ${actual} vs ${expected}`)
     }
+}
+
+const vectorClose = (actual, expected, label) => {
+    for (let index = 0; index < expected.length; index += 1) {
+        close(actual[index], expected[index], `${label}[${index}]`)
+    }
+}
+
+const rotateVec3 = (rotation, vector) => {
+    const q = quat.fromValues(rotation[0], rotation[1], rotation[2], rotation[3])
+    const out = vec3.fromValues(vector[0], vector[1], vector[2])
+    vec3.transformQuat(out, out, q)
+    return Array.from(out)
 }
 
 const buildImportBundle = async () => {
@@ -36,7 +50,7 @@ const buildImportBundle = async () => {
     })
 }
 
-const makeParticle = (name, width, height, rows = 1, columns = 1) => ({
+const makeParticle = (name, width, height, rows = 1, columns = 1, overrides = {}) => ({
     particleIndex: 0,
     name,
     parentBoneId: 0,
@@ -78,6 +92,7 @@ const makeParticle = (name, width, height, rows = 1, columns = 1) => ({
     decayTailUVAnim: [0, 0, 0],
     emissionRateKeys: [],
     visibilityKeys: [],
+    ...overrides,
 })
 
 const main = async () => {
@@ -111,6 +126,32 @@ const main = async () => {
     }
     close(generic.Width, 92.530380, 'generic JumpX PE2 Width')
     close(generic.Length, 126.422134, 'generic JumpX PE2 Length')
+    if (generic.ModelSpace || (generic.Flags & 0x80000) !== 0) {
+        fail('JumpX flag 0 particles should stay bone-space in War3 PE2 mapping')
+    }
+    if (generic.LineEmitter || (generic.Flags & 0x20000) !== 0) {
+        fail('JumpX flag 0 particles should not be forced to War3 PE2 LineEmitter')
+    }
+
+    const directional = mapJumpxParticlesToParticleEmitter2(
+        [
+            makeParticle('part.directional', 1, 1, 1, 1, {
+                normal: [1, 0, 0],
+                xAxis: [0, 0, 1],
+                yAxis: [0, -1, 0],
+                emissionRateKeys: [{ frame: 10667, value: 1 }],
+            }),
+        ],
+        20,
+        { defaultObjectId: 0, objectIdByBoneId: new Map([[0, 0]]) },
+        new Map([[0, 0]]),
+        [],
+    )[0]
+    const rotation = Array.from(directional.Rotation.Keys[0].Vector)
+    vectorClose(rotateVec3(rotation, [0, 0, 1]), [0, 1, 0], 'JumpX normal should become local +Z emission direction')
+    close(directional.Rotation.Keys[0].Frame, 0, 'static PE2 rotation identity guard frame')
+    close(directional.Rotation.Keys[1].Frame, 10667, 'static PE2 rotation should be sampleable inside the JumpX sequence')
+    close(directional.Translation.Keys[1].Frame, 10667, 'static PE2 translation should be sampleable inside the JumpX sequence')
     console.log('JumpX PE2 width/length mapping check passed')
 }
 

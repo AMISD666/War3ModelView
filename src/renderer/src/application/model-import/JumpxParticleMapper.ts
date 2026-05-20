@@ -1,7 +1,8 @@
+import { mat3, quat, vec3 } from 'gl-matrix'
 import type { JumpxImportDiagnostic, JumpxParticleDto } from '../../types/jumpxImport'
 import { NodeType, type ModelNode, type ParticleEmitter2Node } from '../../types/node'
 import type { JumpxNodeMapping } from './JumpxNodeMapper'
-import { transformJumpxQuat, transformJumpxVec3 } from './JumpxCoordinateTransform'
+import { transformJumpxVec3 } from './JumpxCoordinateTransform'
 
 type War3ScalarTrack = {
     LineType: number
@@ -25,6 +26,7 @@ type War3QuatTrack = {
 }
 
 const PARTICLE_SQUIRT = 0x2000
+const PARTICLE_LINE_EMITTER = 0x4000
 const PARTICLE_HEAD = 0x8000
 const PARTICLE_TAIL = 0x10000
 const PARTICLE_BOTH = 0x20000
@@ -69,7 +71,9 @@ const REFERENCE_ORDER_BY_PARTICLE_NAME: Record<string, number> = {
     'part.7xiadd': 9,
 }
 const IDENTITY_QUAT: [number, number, number, number] = [0, 0, 0, 1]
-const DEFAULT_XY_QUAD_NORMAL: [number, number, number] = [0, 0, 1]
+const DEFAULT_BASIS_X = vec3.fromValues(1, 0, 0)
+const DEFAULT_BASIS_Y = vec3.fromValues(0, 1, 0)
+const DEFAULT_BASIS_Z = vec3.fromValues(0, 0, 1)
 
 const warning = (category: JumpxImportDiagnostic['category'], message: string): JumpxImportDiagnostic => ({
     severity: 'warning',
@@ -106,12 +110,13 @@ const mapVariation = (value: number | undefined): number => {
 
 const mapParticleFlags = (particleFlags: number): number => {
     let flags = PE2_NODE_TYPE
+    if ((particleFlags & PARTICLE_LINE_EMITTER) !== 0) flags |= PE2_LINE_EMITTER
     if ((particleFlags & JUMPX_MODEL_SPACE) !== 0) flags |= PE2_MODEL_SPACE
     if ((particleFlags & JUMPX_XY_QUAD) !== 0) flags |= PE2_XY_QUAD
 
-    // The reference JumpX conversion maps zero raw flags to a line-style model-space emitter.
+    // JumpX flag 0 particles are regular bone-space emitters; keep only display defaults here.
     if (particleFlags === 0) {
-        flags |= PE2_UNSHADED | PE2_SORT_PRIMS_FAR_Z | PE2_LINE_EMITTER | PE2_UNFOGGED | PE2_MODEL_SPACE
+        flags |= PE2_UNSHADED | PE2_SORT_PRIMS_FAR_Z | PE2_UNFOGGED
     }
     return flags
 }
@@ -172,12 +177,93 @@ const mapParent = (particle: JumpxParticleDto, nodeMapping: JumpxNodeMapping): n
 
 const referenceName = (name: string): string => name.trim().replace(/\./g, '_')
 
-const normalizeVec3 = (value: [number, number, number]): [number, number, number] | null => {
-    const length = Math.hypot(value[0], value[1], value[2])
-    if (!Number.isFinite(length) || length <= 1e-6) {
+const particleSourceVec3 = (
+    particle: JumpxParticleDto,
+    value: [number, number, number],
+): [number, number, number] => {
+    if ((particle.particleFlags & JUMPX_MODEL_SPACE) === 0) {
+        return value
+    }
+    return [value[0], -value[1], value[2]]
+}
+
+const particleVec3 = (particle: JumpxParticleDto, value: [number, number, number]): [number, number, number] =>
+    transformJumpxVec3(particleSourceVec3(particle, value))
+
+const particlePivotPoint = (particle: JumpxParticleDto): [number, number, number] =>
+    particleVec3(particle, particle.pivot)
+
+const normalizedGlVec3 = (value: [number, number, number]): vec3 | null => {
+    const result = vec3.fromValues(value[0], value[1], value[2])
+    if (vec3.length(result) <= 1e-6) {
         return null
     }
-    return [value[0] / length, value[1] / length, value[2] / length]
+    vec3.normalize(result, result)
+    return result
+}
+
+const removeAxisComponent = (target: vec3, axis: vec3): void => {
+    const projection = vec3.dot(target, axis)
+    target[0] -= axis[0] * projection
+    target[1] -= axis[1] * projection
+    target[2] -= axis[2] * projection
+}
+
+const fallbackPerpendicular = (normal: vec3): vec3 => {
+    const source = Math.abs(vec3.dot(normal, DEFAULT_BASIS_X)) < 0.9 ? DEFAULT_BASIS_X : DEFAULT_BASIS_Y
+    const result = vec3.create()
+    vec3.cross(result, source, normal)
+    if (vec3.length(result) <= 1e-6) {
+        return vec3.clone(DEFAULT_BASIS_X)
+    }
+    vec3.normalize(result, result)
+    return result
+}
+
+const basisRotation = (
+    localX: vec3,
+    localY: vec3,
+    localZ: vec3,
+): [number, number, number, number] => {
+    const matrix = mat3.fromValues(
+        localX[0], localX[1], localX[2],
+        localY[0], localY[1], localY[2],
+        localZ[0], localZ[1], localZ[2],
+    )
+    const result = quat.fromMat3(quat.create(), matrix)
+    if (quat.length(result) <= 1e-6) {
+        return IDENTITY_QUAT
+    }
+    quat.normalize(result, result)
+    return [result[0], result[1], result[2], result[3]]
+}
+
+const particleEmitterRotation = (particle: JumpxParticleDto): [number, number, number, number] => {
+    const normal = normalizedGlVec3(particleVec3(particle, particle.normal)) ?? vec3.clone(DEFAULT_BASIS_Z)
+    const widthAxis = normalizedGlVec3(particleVec3(particle, particle.xAxis)) ?? vec3.clone(DEFAULT_BASIS_X)
+    const heightAxis = normalizedGlVec3(particleVec3(particle, particle.yAxis)) ?? vec3.clone(DEFAULT_BASIS_Y)
+
+    const localX = vec3.clone(heightAxis)
+    removeAxisComponent(localX, normal)
+    if (vec3.length(localX) <= 1e-6) {
+        vec3.copy(localX, fallbackPerpendicular(normal))
+    } else {
+        vec3.normalize(localX, localX)
+    }
+
+    const preferredLocalY = vec3.negate(vec3.create(), widthAxis)
+    const localY = vec3.cross(vec3.create(), normal, localX)
+    if (vec3.length(localY) <= 1e-6) {
+        return IDENTITY_QUAT
+    }
+    vec3.normalize(localY, localY)
+    if (vec3.dot(localY, preferredLocalY) < 0) {
+        vec3.negate(localX, localX)
+        vec3.cross(localY, normal, localX)
+        vec3.normalize(localY, localY)
+    }
+
+    return basisRotation(localX, localY, normal)
 }
 
 const buildStaticVec3Track = (frame: number, vector: [number, number, number]): War3Vec3Track => ({
@@ -195,7 +281,7 @@ const buildStaticQuatTrack = (frame: number, vector: [number, number, number, nu
     InterpolationType: 0,
     GlobalSeqId: null,
     Keys: [
-        { Frame: 0, Vector: new Float32Array([0, 0, 0, 1]) },
+        { Frame: 0, Vector: new Float32Array(vector) },
         { Frame: frame, Vector: new Float32Array(vector) },
     ],
 })
@@ -220,50 +306,6 @@ const firstTrackFrame = (...tracks: Array<War3ScalarTrack | undefined>): number 
     return Number.isFinite(frame) ? frame : 0
 }
 
-const staticParticleRotation = (particle: JumpxParticleDto): [number, number, number, number] => {
-    const rotation = transformJumpxQuat([particle.rotVec[0], particle.rotVec[1], particle.rotVec[2], 1])
-    const length = Math.hypot(rotation[0], rotation[1], rotation[2], rotation[3])
-    if (!Number.isFinite(length) || length <= 1e-6) {
-        return [0, 0, 0, 1]
-    }
-    return [rotation[0] / length, rotation[1] / length, rotation[2] / length, rotation[3] / length]
-}
-
-const xyQuadPlaneRotation = (particle: JumpxParticleDto): [number, number, number, number] => {
-    const transformedNormal = normalizeVec3(transformJumpxVec3(particle.normal))
-    if (!transformedNormal) {
-        return IDENTITY_QUAT
-    }
-
-    const dot = Math.max(-1, Math.min(1,
-        DEFAULT_XY_QUAD_NORMAL[0] * transformedNormal[0]
-        + DEFAULT_XY_QUAD_NORMAL[1] * transformedNormal[1]
-        + DEFAULT_XY_QUAD_NORMAL[2] * transformedNormal[2],
-    ))
-    if (dot > 0.9999) {
-        return IDENTITY_QUAT
-    }
-
-    const axis: [number, number, number] = [
-        DEFAULT_XY_QUAD_NORMAL[1] * transformedNormal[2] - DEFAULT_XY_QUAD_NORMAL[2] * transformedNormal[1],
-        DEFAULT_XY_QUAD_NORMAL[2] * transformedNormal[0] - DEFAULT_XY_QUAD_NORMAL[0] * transformedNormal[2],
-        DEFAULT_XY_QUAD_NORMAL[0] * transformedNormal[1] - DEFAULT_XY_QUAD_NORMAL[1] * transformedNormal[0],
-    ]
-    const axisLength = Math.hypot(axis[0], axis[1], axis[2])
-    if (axisLength <= 1e-6) {
-        return [1, 0, 0, 0]
-    }
-
-    const halfAngle = Math.acos(dot) / 2
-    const sinHalf = Math.sin(halfAngle)
-    return [
-        (axis[0] / axisLength) * sinHalf,
-        (axis[1] / axisLength) * sinHalf,
-        (axis[2] / axisLength) * sinHalf,
-        Math.cos(halfAngle),
-    ]
-}
-
 const particleRotationTrack = (
     particle: JumpxParticleDto,
     firstAnimationFrame: number,
@@ -276,13 +318,7 @@ const particleRotationTrack = (
             { frame: firstAnimationFrame, vector: [0, 0.714142, 0, 0.700001] },
         ])
     }
-    if ((particle.particleFlags & JUMPX_XY_QUAD) !== 0) {
-        return buildQuatTrack([
-            { frame: 0, vector: IDENTITY_QUAT },
-            { frame: firstAnimationFrame, vector: xyQuadPlaneRotation(particle) },
-        ])
-    }
-    return buildStaticQuatTrack(33, staticParticleRotation(particle))
+    return buildStaticQuatTrack(firstAnimationFrame, particleEmitterRotation(particle))
 }
 
 const uvSequenceCellCount = (particle: JumpxParticleDto): number => {
@@ -354,7 +390,7 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         Name: referenceName(particle.name) || `JumpX_Particle_${particle.particleIndex}`,
         ObjectId: firstObjectId + index,
         Parent: mapParent(particle, nodeMapping),
-        PivotPoint: transformJumpxVec3(particle.pivot),
+        PivotPoint: particlePivotPoint(particle),
         Flags: flags,
         EmissionRate: emissionRate ?? finite(particle.emissionRate, 0),
         Speed: finite(particle.speed, 0),
@@ -393,7 +429,7 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         Tail: tail,
         FrameFlags: (head || !tail ? 1 : 0) | (tail ? 2 : 0),
         Visibility: visibility,
-        Translation: buildStaticVec3Track(33, [0, 0, 0]),
+        Translation: buildStaticVec3Track(firstAnimationFrame, [0, 0, 0]),
         Rotation: particleRotationTrack(particle, firstAnimationFrame),
     }
 })
