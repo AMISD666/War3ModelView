@@ -72,25 +72,16 @@ fn read_material_sample_tracks(
 
     let offset = decrypt_offset(sample_addr)?;
     let mut alpha_keys = Vec::with_capacity(sample_count);
-    let mut color_keys = Vec::with_capacity(sample_count);
+    let color_keys = Vec::new();
     for index in 0..sample_count {
         let sample_offset = offset + index * MATERIAL_SAMPLE_RECORD_SIZE;
         let color_argb = read_u32_at(data, sample_offset + MATERIAL_SAMPLE_ALPHA_OFFSET)?;
-        let a = ((color_argb >> 24) & 0xff) as f32;
-        let r = ((color_argb >> 16) & 0xff) as f32 / 255.0;
-        let g = ((color_argb >> 8) & 0xff) as f32 / 255.0;
-        let b = (color_argb & 0xff) as f32 / 255.0;
+        let a = ((color_argb >> 24) & 0xff) as f32 / 255.0;
         let frame = MATERIAL_TRACK_START_FRAME + index as u32;
         alpha_keys.push(JumpxScalarKeyDto {
             frame,
             time_ms: Some(frame as f32 * 1000.0 / MATERIAL_TRACK_FPS),
-            value: if a > 0.0 { a / 255.0 } else { 1.0 },
-            raw_flags: MATERIAL_TRACK_LINE_TYPE,
-        });
-        color_keys.push(JumpxVec3KeyDto {
-            frame,
-            time_ms: Some(frame as f32 * 1000.0 / MATERIAL_TRACK_FPS),
-            value: [r, g, b],
+            value: a,
             raw_flags: MATERIAL_TRACK_LINE_TYPE,
         });
     }

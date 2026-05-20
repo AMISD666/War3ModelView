@@ -15,7 +15,6 @@ import {
 export type JumpxNodeMappingForGeosets = {
     defaultObjectId: number
     objectIdByBoneId: Map<number, number>
-    objectIdByGeometryId?: Map<number, number>
 }
 
 type ClassicInfluence = {
@@ -77,11 +76,6 @@ const buildClassicGroups = (
     nodeMapping: JumpxNodeMappingForGeosets,
     diagnostics: JumpxImportDiagnostic[],
 ): { vertexGroup: Uint8Array | Uint16Array; groups: number[][] } => {
-    const geometryObjectId = nodeMapping.objectIdByGeometryId?.get(geometry.geometryIndex)
-    if (geometryObjectId !== undefined) {
-        return { vertexGroup: new Uint8Array(vertexCount), groups: [[geometryObjectId]] }
-    }
-
     const bakedObjectId = nodeMapping.objectIdByBoneId.get(geometry.skinBoneIds[0]) ?? nodeMapping.defaultObjectId
     if (geometry.objectScale.some((value) => Math.abs(value - 1) > 1e-6)) {
         return { vertexGroup: new Uint8Array(vertexCount), groups: [[bakedObjectId]] }

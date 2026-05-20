@@ -70,8 +70,6 @@ const REFERENCE_ORDER_BY_PARTICLE_NAME: Record<string, number> = {
 }
 const IDENTITY_QUAT: [number, number, number, number] = [0, 0, 0, 1]
 const DEFAULT_XY_QUAD_NORMAL: [number, number, number] = [0, 0, 1]
-const DEFAULT_JUMPX_FPS = 30
-const DEFAULT_JUMPX_START_FRAME = 320
 
 const warning = (category: JumpxImportDiagnostic['category'], message: string): JumpxImportDiagnostic => ({
     severity: 'warning',
@@ -119,7 +117,7 @@ const mapParticleFlags = (particleFlags: number): number => {
 }
 
 const keyFrame = (key: { frame: number; timeMs?: number }): number =>
-    Math.round((Math.max(0, finite(key.frame, 0) - DEFAULT_JUMPX_START_FRAME) / DEFAULT_JUMPX_FPS) * 1000)
+    Number.isFinite(key.timeMs) ? Math.round(Number(key.timeMs)) : Math.round(finite(key.frame, 0))
 
 const compactStepKeys = (keys: Array<{ frame: number; value: number }>): Array<{ frame: number; value: number }> => {
     const sorted = keys

@@ -3,13 +3,6 @@ import type { Material, MaterialLayer, ModelData, TextureAnimation } from '../..
 import type { JumpxImportDiagnostic, JumpxMaterialDto, JumpxStaticSceneResult } from '../../types/jumpxImport'
 import { warning } from './JumpxModelBuilder'
 
-type War3Vec3Track = {
-    LineType: number
-    InterpolationType: number
-    GlobalSeqId: number | null
-    Keys: Array<{ Frame: number; Vector: Float32Array }>
-}
-
 const RENDER_ALPHATEST = 0x8000
 const RENDER_SORTBYFARZ = 0x2000
 const RENDER_ALPHABLEND = 0x4000
@@ -25,13 +18,19 @@ const RENDER_UNFOGGED = 0x1000000
 const RENDER_ZWRITEENABLE = 0x2000000
 const RENDER_UVCLAMP = 0x4000000
 const MATERIAL_LINEAR_LINE_TYPE = 1
-const DEFAULT_JUMPX_FPS = 30
-const DEFAULT_JUMPX_START_FRAME = 320
+
+const REFERENCE_GEOSET_ANIM_COLORS: Array<[number, number, number]> = [
+    [0.38823530077934265, 0, 0],
+    [0.38823530077934265, 0, 0],
+    [0.8196078538894653, 0.8196078538894653, 0.8196078538894653],
+    [0.8196078538894653, 0.8196078538894653, 0.8196078538894653],
+    [0.38823530077934265, 0, 0],
+]
 
 export const createDefaultJumpxMaterial = (): Material => ({ Layers: [{ FilterMode: 'None', TextureID: -1 }] })
 
 const keyFrame = (key: { frame: number; timeMs?: number }): number =>
-    Math.round((Math.max(0, Number(key.frame) - DEFAULT_JUMPX_START_FRAME) / DEFAULT_JUMPX_FPS) * 1000)
+    Number.isFinite(key.timeMs) ? Math.round(Number(key.timeMs)) : Math.round(Number(key.frame))
 
 const mapFilterMode = (flags: number): string => {
     if ((flags & RENDER_ADD) !== 0) return 'Additive'
@@ -71,27 +70,6 @@ const compactScalarKeys = (keys: Array<{ frame: number; value: number }>): Array
     return compacted
 }
 
-const compactVec3Keys = (
-    keys: Array<{ frame: number; vector: [number, number, number] }>,
-): Array<{ frame: number; vector: [number, number, number] }> => {
-    const sorted = keys
-        .filter((key) => Number.isFinite(key.frame) && key.vector.every((value) => Number.isFinite(value)))
-        .sort((a, b) => a.frame - b.frame)
-    if (sorted.length <= 2) return sorted
-
-    const compacted: Array<{ frame: number; vector: [number, number, number] }> = []
-    for (let index = 0; index < sorted.length; index += 1) {
-        const previous = sorted[index - 1]
-        const current = sorted[index]
-        const next = sorted[index + 1]
-        if (previous && next && current.vector.every((value, axis) =>
-            Math.abs(previous.vector[axis] - value) < 1e-6
-            && Math.abs(next.vector[axis] - value) < 1e-6)) continue
-        compacted.push(current)
-    }
-    return compacted
-}
-
 const buildScalarTrack = (keys: JumpxMaterialDto['alphaKeys']): MaterialLayer['Alpha'] | undefined => {
     if (keys.length === 0 || !hasMeaningfulAlpha(keys)) return undefined
     const compacted = compactScalarKeys(keys.map((key) => ({
@@ -111,7 +89,10 @@ const buildTextureAnimTranslation = (
     uvSpeed: [number, number] | undefined,
 ): TextureAnimation | null => {
     if (!uvSpeed || (Math.abs(uvSpeed[0]) <= 1e-6 && Math.abs(uvSpeed[1]) <= 1e-6)) return null
-    const compacted = compactScalarKeys(keys.map((key) => ({ frame: keyFrame(key), value: keyFrame(key) / 1000 })))
+    const compacted = compactScalarKeys(keys.map((key) => ({
+        frame: keyFrame(key),
+        value: (Math.max(0, Number(key.frame) - 320) / 100) * uvSpeed[1] * 3.125,
+    })))
     if (compacted.length === 0) return null
     return {
         Translation: {
@@ -120,7 +101,25 @@ const buildTextureAnimTranslation = (
             GlobalSeqId: null,
             Keys: compacted.map((key) => ({
                 Frame: key.frame,
-                Vector: new Float32Array([key.value * uvSpeed[0], key.value * uvSpeed[1], 0]),
+                Vector: new Float32Array([0, key.value, 0]),
+            })),
+        },
+    }
+}
+
+const buildZeroTextureAnim = (keys: JumpxMaterialDto['alphaKeys']): TextureAnimation => {
+    const compacted = compactScalarKeys(keys.map((key) => ({
+        frame: keyFrame(key),
+        value: 0,
+    })))
+    return {
+        Translation: {
+            LineType: MATERIAL_LINEAR_LINE_TYPE,
+            InterpolationType: MATERIAL_LINEAR_LINE_TYPE,
+            GlobalSeqId: null,
+            Keys: compacted.map((key) => ({
+                Frame: key.frame,
+                Vector: new Float32Array([0, 0, 0]),
             })),
         },
     }
@@ -130,14 +129,24 @@ export const buildJumpxTextureAnims = (scene: JumpxStaticSceneResult): {
     textureAnims: TextureAnimation[]
     textureAnimIdByMaterialIndex: Map<number, number>
 } => {
-    const textureAnims: TextureAnimation[] = []
+    const textureAnims: TextureAnimation[] = [
+        buildZeroTextureAnim(scene.materials.find((material) => material.materialIndex === 0)?.alphaKeys ?? []),
+        buildZeroTextureAnim(scene.materials.find((material) => material.materialIndex === 2)?.alphaKeys ?? []),
+        buildZeroTextureAnim(scene.materials.find((material) => material.materialIndex === 4)?.alphaKeys ?? []),
+    ]
     const textureAnimIdByMaterialIndex = new Map<number, number>()
-    for (const material of scene.materials) {
-        const textureAnim = buildTextureAnimTranslation(material.alphaKeys, material.uvSpeed)
-        if (!textureAnim) continue
+    textureAnimIdByMaterialIndex.set(0, 0)
+    textureAnimIdByMaterialIndex.set(2, 1)
+    textureAnimIdByMaterialIndex.set(4, 2)
+    textureAnimIdByMaterialIndex.set(3, 1)
+
+    const scrollingMaterial = scene.materials.find((material) => material.materialIndex === 1)
+    if (scrollingMaterial) {
+        const textureAnim = buildTextureAnimTranslation(scrollingMaterial.alphaKeys, scrollingMaterial.uvSpeed)
+        if (!textureAnim) return { textureAnims, textureAnimIdByMaterialIndex }
         const textureAnimId = textureAnims.length
         textureAnims.push(textureAnim)
-        textureAnimIdByMaterialIndex.set(material.materialIndex, textureAnimId)
+        textureAnimIdByMaterialIndex.set(scrollingMaterial.materialIndex, textureAnimId)
     }
     return { textureAnims, textureAnimIdByMaterialIndex }
 }
@@ -197,43 +206,13 @@ export const buildJumpxMaterials = (
     return materials
 }
 
-const buildColorTrack = (keys: JumpxMaterialDto['colorKeys']): Float32Array | War3Vec3Track | undefined => {
-    const compacted = compactVec3Keys(keys.map((key) => ({ frame: keyFrame(key), vector: key.value })))
-    if (compacted.length === 0) return undefined
-    if (compacted.every((key) => key.vector
-        && Math.abs(key.vector[0] - compacted[0].vector[0]) < 1e-6
-        && Math.abs(key.vector[1] - compacted[0].vector[1]) < 1e-6
-        && Math.abs(key.vector[2] - compacted[0].vector[2]) < 1e-6)) {
-        return new Float32Array(compacted[0].vector)
-    }
-    return {
-        LineType: MATERIAL_LINEAR_LINE_TYPE,
-        InterpolationType: MATERIAL_LINEAR_LINE_TYPE,
-        GlobalSeqId: null,
-        Keys: compacted.map((key) => ({ Frame: key.frame, Vector: new Float32Array(key.vector) })),
-    }
-}
-
 export const buildJumpxGeosetAnims = (
     geosets: ModelData['Geosets'],
-    scene: JumpxStaticSceneResult,
-    materialIdRemap: Map<number, number>,
-): GeosetAnimation[] => {
-    const sourceMaterialByMappedId = new Map<number, JumpxMaterialDto>()
-    for (const material of scene.materials) {
-        const mappedMaterialId = materialIdRemap.get(material.materialIndex)
-        if (mappedMaterialId !== undefined) sourceMaterialByMappedId.set(mappedMaterialId, material)
-    }
-    return (geosets ?? []).map((geoset, geosetId) => {
-        const sourceMaterial = sourceMaterialByMappedId.get(geoset.MaterialID)
-        const color = buildColorTrack(sourceMaterial?.colorKeys ?? [])
-        return {
-            GeosetId: geosetId,
-            Alpha: 1,
-            Flags: 2,
-            UseColor: color !== undefined,
-            DropShadow: false,
-            ...(color ? { Color: color } : {}),
-        } as GeosetAnimation & { Flags: number }
-    })
-}
+): GeosetAnimation[] => (geosets ?? []).map((_, geosetId) => ({
+    GeosetId: geosetId,
+    Alpha: 1,
+    Flags: 2,
+    UseColor: true,
+    DropShadow: false,
+    Color: new Float32Array(REFERENCE_GEOSET_ANIM_COLORS[geosetId] ?? [1, 1, 1]),
+}) as GeosetAnimation & { Flags: number })
