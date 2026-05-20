@@ -61,6 +61,7 @@ export interface JumpxMaterialDto {
     colorKeys: JumpxVec3KeyDto[]
     alphaKeys: JumpxScalarKeyDto[]
     uvOffsetKeys: JumpxVec3KeyDto[]
+    blendKeys: JumpxScalarKeyDto[]
     uvSpeed?: [number, number]
 }
 
@@ -68,6 +69,8 @@ export interface JumpxGeometryDto {
     geometryIndex: number
     name: string
     materialId: number
+    geometryType: number
+    ancestorBoneId: number
     vertexCount: number
     indexCount: number
     vertices: number[]

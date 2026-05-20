@@ -45,7 +45,7 @@ export interface Geoset {
 export interface GeosetAnimation {
     GeosetId: number;
     Color?: [number, number, number] | Float32Array;
-    Alpha?: number;
+    Alpha?: number | object;
     UseColor?: boolean;
     DropShadow?: boolean;
 }

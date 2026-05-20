@@ -17,9 +17,10 @@ pub(in crate::jumpx_import) fn parse_textures(
             texture_index: index as u32,
             path: name.clone(),
             name,
-            raw_flags: data_addr,
+            raw_flags: 0,
             save_flags: 0,
         });
+        let _ = data_addr;
     }
     Ok(out)
 }

@@ -29,6 +29,8 @@ fn jumpx_import_fixture_core_sections() {
     assert_eq!(result.textures[0].name, "tx_kuosan_0059.dds");
     assert_eq!(result.geometries.len(), 5);
     assert_eq!(result.geometries[4].name, "avmesh.tiaodai#9");
+    assert_eq!(result.geometries[0].geometry_type, 6);
+    assert_eq!(result.geometries[0].ancestor_bone_id, 7);
     assert_eq!(result.geometries[4].vertex_count, 250);
     assert_eq!(result.geometries[4].index_count, 744);
     assert_eq!(result.materials[0].alpha_keys.len(), 101);
@@ -36,6 +38,13 @@ fn jumpx_import_fixture_core_sections() {
     assert_eq!(result.materials[0].alpha_keys[0].value, 0.0);
     assert_eq!(result.materials[0].color_keys.len(), 101);
     assert_eq!(result.materials[0].uv_offset_keys.len(), 101);
+    assert_eq!(result.materials[0].blend_keys.len(), 101);
+    assert_eq!(result.materials[0].blend_keys[0].value as u32, 0x100000);
+    assert!(result
+        .materials
+        .iter()
+        .flat_map(|material| material.blend_keys.iter())
+        .any(|key| (key.value as u32 & 0x40000) != 0));
     assert!((result.materials[0].color_keys[0].value[0] - (99.0 / 255.0)).abs() < 0.0001);
     assert!((result.materials[0].color_keys[0].value[1] - 0.0).abs() < 0.0001);
     assert!((result.materials[0].color_keys[0].value[2] - 0.0).abs() < 0.0001);

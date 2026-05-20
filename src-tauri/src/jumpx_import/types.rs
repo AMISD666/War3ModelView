@@ -72,6 +72,7 @@ pub struct JumpxMaterialDto {
     pub color_keys: Vec<JumpxVec3KeyDto>,
     pub alpha_keys: Vec<JumpxScalarKeyDto>,
     pub uv_offset_keys: Vec<JumpxVec3KeyDto>,
+    pub blend_keys: Vec<JumpxScalarKeyDto>,
     pub uv_speed: Option<[f32; 2]>,
 }
 
@@ -81,6 +82,8 @@ pub struct JumpxGeometryDto {
     pub geometry_index: u32,
     pub name: String,
     pub material_id: i32,
+    pub geometry_type: u32,
+    pub ancestor_bone_id: i32,
     pub vertex_count: u32,
     pub index_count: u32,
     pub vertices: Vec<f32>,

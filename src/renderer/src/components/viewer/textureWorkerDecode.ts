@@ -268,9 +268,13 @@ export async function decodeBatchWithWorkerPool(
     for (const path of failedPaths) {
         const bytes = workerByteMap.get(path) || entries.find(([entryPath]) => entryPath === path)?.[1]
         if (!bytes) continue
-        const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
-        if (imageData) {
-            decoded.set(path, imageData)
+        try {
+            const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
+            if (imageData) {
+                decoded.set(path, imageData)
+            }
+        } catch (error) {
+            console.warn('[Texture] Worker fallback decode failed:', path, error)
         }
         fallbackDecodeCount += 1
         if (fallbackDecodeCount >= 2 || performance.now() - fallbackBatchStart >= 8) {

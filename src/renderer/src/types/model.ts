@@ -16,7 +16,7 @@ export interface Texture {
 
 // 材质层
 export interface MaterialLayer {
-    FilterMode: string;  // 'None' | 'Transparent' | 'Blend' | 'Additive' | 'AddAlpha' | 'Modulate' etc.
+    FilterMode: string | number;  // 0=None, 1=Transparent, 2=Blend, 3=Additive, 4=AddAlpha, 5=Modulate, 6=Modulate2x.
     TextureID: number;
     Alpha?: number | object;
     TextureAnimationId?: number;

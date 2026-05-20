@@ -17,6 +17,7 @@ struct MaterialSampleTracks {
     alpha_keys: Vec<JumpxScalarKeyDto>,
     color_keys: Vec<JumpxVec3KeyDto>,
     uv_offset_keys: Vec<JumpxVec3KeyDto>,
+    blend_keys: Vec<JumpxScalarKeyDto>,
 }
 
 pub(in crate::jumpx_import) fn parse_materials(
@@ -53,6 +54,7 @@ pub(in crate::jumpx_import) fn parse_materials(
             color_keys: sample_tracks.color_keys,
             alpha_keys: sample_tracks.alpha_keys,
             uv_offset_keys: sample_tracks.uv_offset_keys,
+            blend_keys: sample_tracks.blend_keys,
             uv_speed: Some(uv_speed)
                 .filter(|value| value[0].abs() > EPSILON || value[1].abs() > EPSILON),
         });
@@ -72,6 +74,7 @@ fn read_material_sample_tracks(
             alpha_keys: Vec::new(),
             color_keys: Vec::new(),
             uv_offset_keys: Vec::new(),
+            blend_keys: Vec::new(),
         });
     }
 
@@ -79,6 +82,7 @@ fn read_material_sample_tracks(
     let mut alpha_keys = Vec::with_capacity(sample_count);
     let mut color_keys = Vec::with_capacity(sample_count);
     let mut uv_offset_keys = Vec::with_capacity(sample_count);
+    let mut blend_keys = Vec::with_capacity(sample_count);
     for index in 0..sample_count {
         let sample_offset = offset + index * MATERIAL_SAMPLE_RECORD_SIZE;
         let color_rgba = read_u32_at(data, sample_offset + MATERIAL_SAMPLE_COLOR_OFFSET)?;
@@ -88,30 +92,38 @@ fn read_material_sample_tracks(
         let a = ((color_rgba >> 24) & 0xff) as f32 / 255.0;
         let uv_x = read_f32_at(data, sample_offset + MATERIAL_SAMPLE_UV_OFFSET)?;
         let uv_y = read_f32_at(data, sample_offset + MATERIAL_SAMPLE_UV_OFFSET + 4)?;
+        let blend = read_u32_at(data, sample_offset + MATERIAL_SAMPLE_BLEND_OFFSET)?;
         let frame = MATERIAL_TRACK_START_FRAME + index as u32;
+        let time_ms = Some(frame as f32 * 1000.0 / MATERIAL_TRACK_FPS);
         alpha_keys.push(JumpxScalarKeyDto {
             frame,
-            time_ms: Some(frame as f32 * 1000.0 / MATERIAL_TRACK_FPS),
+            time_ms,
             value: a,
             raw_flags: MATERIAL_TRACK_LINE_TYPE,
         });
         color_keys.push(JumpxVec3KeyDto {
             frame,
-            time_ms: Some(frame as f32 * 1000.0 / MATERIAL_TRACK_FPS),
+            time_ms,
             value: [r, g, b],
             raw_flags: MATERIAL_TRACK_LINE_TYPE,
         });
         uv_offset_keys.push(JumpxVec3KeyDto {
             frame,
-            time_ms: Some(frame as f32 * 1000.0 / MATERIAL_TRACK_FPS),
+            time_ms,
             value: [uv_x, uv_y, 0.0],
             raw_flags: MATERIAL_TRACK_LINE_TYPE,
         });
-        let _ = read_u32_at(data, sample_offset + MATERIAL_SAMPLE_BLEND_OFFSET)?;
+        blend_keys.push(JumpxScalarKeyDto {
+            frame,
+            time_ms,
+            value: blend as f32,
+            raw_flags: MATERIAL_TRACK_LINE_TYPE,
+        });
     }
     Ok(MaterialSampleTracks {
         alpha_keys,
         color_keys,
         uv_offset_keys,
+        blend_keys,
     })
 }

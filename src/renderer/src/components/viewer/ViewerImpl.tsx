@@ -1482,6 +1482,29 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     return Number.isInteger(numericValue) && numericValue >= 0 ? numericValue : null;
   };
 
+  const normalizeRendererFilterMode = (value: unknown): number => {
+    const rawValue = value && typeof value === "object" && "value" in value
+      ? (value as { value?: unknown }).value
+      : value;
+    if (typeof rawValue === "string") {
+      const normalized = rawValue.replace(/\s+/g, "").toLowerCase();
+      const map: Record<string, number> = {
+        none: 0,
+        transparent: 1,
+        alphakey: 1,
+        blend: 2,
+        additive: 3,
+        addalpha: 4,
+        modulate: 5,
+        modulate2x: 6,
+      };
+      const parsed = /^\d+$/.test(normalized) ? Number.parseInt(normalized, 10) : map[normalized];
+      return Number.isInteger(parsed) ? Math.min(Math.max(parsed, 0), 6) : 0;
+    }
+    const numericValue = typeof rawValue === "number" ? rawValue : Number(rawValue);
+    return Number.isInteger(numericValue) ? Math.min(Math.max(numericValue, 0), 6) : 0;
+  };
+
   const omitTextureAnimAliases = (layer: Record<string, unknown>, tVertexAnimId: number | null, textureId?: number) => {
     const { TextureAnimationId, TextureAnimId, ...cleanLayer } = layer;
     return textureId === undefined
@@ -1524,11 +1547,13 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         const safeTextureId = Number.isFinite(rawTextureId)
           ? Math.min(Math.max(-1, Math.floor(rawTextureId)), maxTextureId)
           : -1;
+        const safeFilterMode = normalizeRendererFilterMode(layer.FilterMode);
+        const filterModeChanged = layer.FilterMode !== safeFilterMode;
 
-        if (safeTextureId !== layer.TextureID || tVertexAnimChanged) {
+        if (safeTextureId !== layer.TextureID || tVertexAnimChanged || filterModeChanged) {
           materialChanged = true;
           hasChanges = true;
-          return omitTextureAnimAliases(layer, safeTVertexAnimId, safeTextureId);
+          return { ...omitTextureAnimAliases(layer, safeTVertexAnimId, safeTextureId), FilterMode: safeFilterMode };
         }
 
         return layer;
@@ -1561,10 +1586,15 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
       rendererData.gpuSamplers = [];
     }
 
+    if (!Array.isArray(rendererData.gpuSamplerSignatures)) {
+      rendererData.gpuSamplerSignatures = [];
+    }
+
     for (let i = 0; i < textures.length; i++) {
-      if (rendererData.gpuSamplers[i]) continue;
       const texture = textures[i] || {};
       const flags = typeof texture.Flags === "number" ? texture.Flags : 0;
+      const signature = String(flags);
+      if (rendererData.gpuSamplers[i] && rendererData.gpuSamplerSignatures[i] === signature) continue;
       const addressModeU: GPUAddressMode = flags & 1 ? "repeat" : "clamp-to-edge";
       const addressModeV: GPUAddressMode = flags & 2 ? "repeat" : "clamp-to-edge";
 
@@ -1576,6 +1606,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
         addressModeU,
         addressModeV,
       });
+      rendererData.gpuSamplerSignatures[i] = signature;
     }
   };
 

@@ -159,6 +159,13 @@ function denormalizeMaterialsForSave(materials: any[]): any[] {
     })
 }
 
+const getValidMaterialLayerIndex = (materials: any[], materialIndex: number, preferredLayerIndex: number): number => {
+    const material = materialIndex >= 0 && materialIndex < materials.length ? materials[materialIndex] : null
+    const layers = Array.isArray(material?.Layers) ? material.Layers : []
+    if (layers.length === 0) return -1
+    return preferredLayerIndex >= 0 && preferredLayerIndex < layers.length ? preferredLayerIndex : 0
+}
+
 interface MaterialEditorModalProps {
     visible: boolean
     onClose: () => void
@@ -355,7 +362,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
         directSetSelectedMaterialIndex(materialIndex)
         directSetSelectedMaterialLayerIndex(layerIndex)
-    }, [directSetSelectedMaterialIndex, directSetSelectedMaterialLayerIndex, emitCommand, isStandalone])
+    }, [directSetSelectedMaterialIndex, directSetSelectedMaterialLayerIndex, emitMaterialAction, isStandalone])
+
+    const setMaterialLayerSelection = useCallback((materialIndex: number, layerIndex: number) => {
+        setSelectedMaterialIndex(materialIndex)
+        setSelectedLayerIndex(layerIndex)
+        syncMaterialSelection(materialIndex >= 0 ? materialIndex : null, layerIndex >= 0 ? layerIndex : null)
+    }, [syncMaterialSelection])
 
     const focusMaterialForGeoset = useCallback((geosetIndex: number | null | undefined) => {
         if (!Number.isInteger(geosetIndex) || geosetIndex === null || geosetIndex === undefined) {
@@ -570,6 +583,24 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         selectedLayerIndexRef.current = selectedLayerIndex
     }, [modelData, selectedMaterialIndex, selectedLayerIndex])
 
+    useEffect(() => {
+        if (!visible) return
+        if (localMaterials.length === 0) {
+            if (selectedMaterialIndex !== -1 || selectedLayerIndex !== -1) {
+                setMaterialLayerSelection(-1, -1)
+            }
+            return
+        }
+        const nextMaterialIndex =
+            selectedMaterialIndex >= 0 && selectedMaterialIndex < localMaterials.length
+                ? selectedMaterialIndex
+                : Math.min(Math.max(selectedMaterialIndex, 0), localMaterials.length - 1)
+        const nextLayerIndex = getValidMaterialLayerIndex(localMaterials, nextMaterialIndex, selectedLayerIndex)
+        if (nextMaterialIndex !== selectedMaterialIndex || nextLayerIndex !== selectedLayerIndex) {
+            setMaterialLayerSelection(nextMaterialIndex, nextLayerIndex)
+        }
+    }, [visible, localMaterials, selectedMaterialIndex, selectedLayerIndex, setMaterialLayerSelection])
+
     const applyMaterialsChange = React.useCallback((updater: (previous: any[]) => any[]) => {
         const previousMaterials = cloneDeep(localMaterialsRef.current || [])
         const nextMaterials = updater(previousMaterials)
@@ -666,8 +697,9 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                 setLocalMaterials(normalized)
                 if (!isInitialized.current) {
                     const firstMat = normalized[0]
-                    setSelectedMaterialIndex(normalized.length > 0 ? 0 : -1)
-                    setSelectedLayerIndex(firstMat && firstMat.Layers && firstMat.Layers.length > 0 ? 0 : -1)
+                    const nextMaterialIndex = normalized.length > 0 ? 0 : -1
+                    const nextLayerIndex = firstMat && firstMat.Layers && firstMat.Layers.length > 0 ? 0 : -1
+                    setMaterialLayerSelection(nextMaterialIndex, nextLayerIndex)
                 } else {
                     const nextMaterialIndex =
                         selectedMaterialIndex >= 0 && selectedMaterialIndex < normalized.length
@@ -681,8 +713,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
                         nextMaterial && nextMaterial.Layers && nextMaterial.Layers.length > 0
                             ? (selectedLayerIndex >= 0 && selectedLayerIndex < nextMaterial.Layers.length ? selectedLayerIndex : 0)
                             : -1
-                    setSelectedMaterialIndex(nextMaterialIndex)
-                    setSelectedLayerIndex(nextLayerIndex)
+                    setMaterialLayerSelection(nextMaterialIndex, nextLayerIndex)
                 }
                 isInitialized.current = true
                 }
@@ -731,7 +762,7 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
             didRealtimePreviewRef.current = false
             didRealtimeTexturePreviewRef.current = false
         }
-    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcSnapshotRevision])
+    }, [visible, modelData, isStandalone, selectedMaterialIndex, selectedLayerIndex, rpcSnapshotRevision, setMaterialLayerSelection])
 
     // Subscribe to Ctrl+Click geoset picking - auto-select material
     useEffect(() => {
@@ -863,7 +894,10 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
 
     const handleCancel = () => {
         if (isStandalone) {
-            commitMaterialEditorChanges(false)
+            if (!isCommittingRef.current && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
+                emitMaterialAction({ action: 'CLEAR_MATERIAL_PREVIEW' })
+            }
+            onClose()
             return
         }
         if (!isCommittingRef.current && (didRealtimeTexturePreviewRef.current || didRealtimePreviewRef.current)) {
@@ -1154,10 +1188,13 @@ const MaterialEditorModal: React.FC<MaterialEditorModalProps> = ({ visible, onCl
         }
 
         if (selectedMaterialIndex === index) {
-            setSelectedMaterialIndex(-1)
-            setSelectedLayerIndex(-1)
+            const nextMaterialIndex = newMaterials.length > 0 ? Math.min(index, newMaterials.length - 1) : -1
+            const nextLayerIndex = getValidMaterialLayerIndex(newMaterials, nextMaterialIndex, selectedLayerIndex)
+            setMaterialLayerSelection(nextMaterialIndex, nextLayerIndex)
         } else if (selectedMaterialIndex > index) {
-            setSelectedMaterialIndex(selectedMaterialIndex - 1)
+            const nextMaterialIndex = selectedMaterialIndex - 1
+            const nextLayerIndex = getValidMaterialLayerIndex(newMaterials, nextMaterialIndex, selectedLayerIndex)
+            setMaterialLayerSelection(nextMaterialIndex, nextLayerIndex)
         }
     }
 

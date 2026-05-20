@@ -1,7 +1,7 @@
 import type { ModelData } from '../../types/model'
 import type { JumpxImportDiagnostic, JumpxStaticSceneResult } from '../../types/jumpxImport'
 import { getPathDir } from '../../utils/windowsPath'
-import { buildJumpxGeosetAnims, buildJumpxMaterials, buildJumpxTextureAnims } from './JumpxMaterialMapper'
+import { buildJumpxGeosetAnims, buildJumpxMaterials, buildJumpxTextureAnims, getJumpxMaterialTextureFlags } from './JumpxMaterialMapper'
 import { buildJumpxTextureLookup, ensureJumpxTextureSlot, jumpxTextureWrapFlags } from './JumpxTextureMapper'
 import { mapJumpxGeometryToGeosets } from './JumpxGeosetMapper'
 import { buildJumpxNodeMapping, type JumpxNodeMapping } from './JumpxNodeMapper'
@@ -128,11 +128,10 @@ export const buildJumpxStaticModelData = (
     const materialIdRemap = buildMaterialIdRemap(scene)
     const { textureAnims, textureAnimIdByMaterialIndex } = buildJumpxTextureAnims(scene)
     for (const material of scene.materials) {
-        if (material.materialIndex >= 0 && material.materialIndex <= 4) {
-            const textureId = ensureJumpxTextureSlot(sourceModelDir, scene, textureLookup.textures, textureLookup.textureIdByJumpxIndex, material.textureId, jumpxTextureWrapFlags)
-            if (textureId >= 0) {
-                textureLookup.textureIdByJumpxIndex.set(-1000 - material.materialIndex, textureId)
-            }
+        const textureFlags = getJumpxMaterialTextureFlags(material, jumpxTextureWrapFlags)
+        const textureId = ensureJumpxTextureSlot(sourceModelDir, scene, textureLookup.textures, textureLookup.textureIdByJumpxIndex, material.textureId, textureFlags)
+        if (textureId >= 0) {
+            textureLookup.textureIdByJumpxIndex.set(-1000 - material.materialIndex, textureId)
         }
     }
     const modelData = createBaseImportedModel(path, extents)
@@ -155,10 +154,19 @@ export const buildJumpxStaticModelData = (
     modelData.Model.NumHelpers = modelData.Helpers.length
 
     const maxMaterialId = Math.max(0, modelData.Materials.length - 1)
-    modelData.Geosets = scene.geometries.flatMap((geometry) =>
-        mapJumpxGeometryToGeosets(geometry, Math.min(Math.max(0, materialIdRemap.get(geometry.materialId) ?? geometry.materialId), maxMaterialId), nodeMapping, diagnostics))
+    const geosetSourceGeometries: JumpxStaticSceneResult['geometries'] = []
+    modelData.Geosets = scene.geometries.flatMap((geometry) => {
+        const mappedGeosets = mapJumpxGeometryToGeosets(
+            geometry,
+            Math.min(Math.max(0, materialIdRemap.get(geometry.materialId) ?? geometry.materialId), maxMaterialId),
+            nodeMapping,
+            diagnostics,
+        )
+        mappedGeosets.forEach(() => geosetSourceGeometries.push(geometry))
+        return mappedGeosets
+    })
     modelData.Model.NumGeosets = modelData.Geosets.length
-    modelData.GeosetAnims = buildJumpxGeosetAnims(modelData.Geosets, scene.materials, materialIdRemap)
+    modelData.GeosetAnims = buildJumpxGeosetAnims(modelData.Geosets, geosetSourceGeometries, scene.materials, scene.bones, materialIdRemap)
     modelData.Model.NumGeosetAnims = modelData.GeosetAnims.length
 
     const firstParticleObjectId = nodeMapping.nodes.length

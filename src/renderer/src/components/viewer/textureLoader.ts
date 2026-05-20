@@ -344,14 +344,18 @@ export async function loadAllTextures(
             }
         } else {
             for (const [path, bytes] of uncachedEntries) {
-                const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
-                if (imageData) {
-                    decodedTextures.set(path, imageData)
-                    decodedCount += 1
-                    const cacheKey = decodeCacheKeys.get(path)
-                    if (cacheKey) {
-                        setCachedDecodedTexture(cacheKey, imageData, decodeCacheDependencies.get(path))
+                try {
+                    const imageData = await decodeTextureDataAsync(toTightArrayBuffer(bytes), path, textureOptionsByPath.get(path))
+                    if (imageData) {
+                        decodedTextures.set(path, imageData)
+                        decodedCount += 1
+                        const cacheKey = decodeCacheKeys.get(path)
+                        if (cacheKey) {
+                            setCachedDecodedTexture(cacheKey, imageData, decodeCacheDependencies.get(path))
+                        }
                     }
+                } catch (error) {
+                    console.warn('[Texture] Decode failed:', path, error)
                 }
             }
         }

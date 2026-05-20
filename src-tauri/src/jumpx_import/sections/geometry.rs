@@ -122,6 +122,8 @@ pub(in crate::jumpx_import) fn parse_geometries(
             geometry_index: index as u32,
             name,
             material_id,
+            geometry_type,
+            ancestor_bone_id: ancestor_bone,
             vertex_count: vertex_count as u32,
             index_count: indices.len() as u32,
             vertices,

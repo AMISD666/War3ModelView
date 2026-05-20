@@ -165,10 +165,11 @@ export const getMaterialManagerMaterialListItems = (
     summaries: MaterialManagerMaterialSummary[] | undefined,
     legacyMaterials: unknown[] | undefined,
 ): MaterialManagerMaterialSummary[] => {
-    const legacyCount = Array.isArray(legacyMaterials) ? legacyMaterials.length : 0
+    const hasLegacyMaterials = Array.isArray(legacyMaterials)
+    const legacyCount = hasLegacyMaterials ? legacyMaterials.length : 0
     if (Array.isArray(summaries) && summaries.length > 0) {
         const summaryByIndex = new Map(summaries.map((summary) => [summary.index, summary]))
-        const count = Math.max(summaries.length, legacyCount)
+        const count = hasLegacyMaterials ? legacyCount : summaries.length
         return Array.from({ length: count }, (_, index) => {
             const summary = summaryByIndex.get(index)
             if (summary) return summary
@@ -190,6 +191,9 @@ export const getMaterialManagerSelectedMaterialDetail = (
     selectedMaterialIndex: number,
 ): MaterialManagerSelectedMaterialDetail | null => {
     if (!Number.isInteger(selectedMaterialIndex) || selectedMaterialIndex < 0) {
+        return null
+    }
+    if (Array.isArray(legacyMaterials) && selectedMaterialIndex >= legacyMaterials.length) {
         return null
     }
 

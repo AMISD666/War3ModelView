@@ -3,20 +3,21 @@ import type { Material, MaterialLayer, ModelData, TextureAnimation } from '../..
 import type { JumpxImportDiagnostic, JumpxMaterialDto, JumpxStaticSceneResult } from '../../types/jumpxImport'
 import { warning } from './JumpxModelBuilder'
 
+const XGEO_NORMAL_MESH = 0
 const RENDER_ALPHATEST = 0x8000
 const RENDER_SORTBYFARZ = 0x2000
 const RENDER_ALPHABLEND = 0x4000
-const RENDER_TWOSIDED = 0x10000
 const RENDER_BLEND = 0x20000
 const RENDER_ADD = 0x40000
 const RENDER_MODULATE = 0x80000
 const RENDER_MODULATE2X = 0x100000
 const RENDER_MODULATE4X = 0x200000
 const RENDER_ALPHAKEY = 0x400000
-const RENDER_UNSHADED = 0x800000
-const RENDER_UNFOGGED = 0x1000000
-const RENDER_ZWRITEENABLE = 0x2000000
 const RENDER_UVCLAMP = 0x4000000
+const LAYER_SHADING_UNSHADED = 1
+const LAYER_SHADING_TWOSIDED = 16
+const LAYER_SHADING_NODEPTHSET = 128
+const DEFAULT_JUMPX_LAYER_SHADING = LAYER_SHADING_UNSHADED | LAYER_SHADING_TWOSIDED | LAYER_SHADING_NODEPTHSET
 const MATERIAL_LINEAR_LINE_TYPE = 1
 const DEFAULT_JUMPX_START_FRAME = 320
 const DEFAULT_JUMPX_FPS = 30
@@ -27,7 +28,13 @@ type TextureAnimSampleKey = {
     value: number | [number, number, number]
 }
 
-export const createDefaultJumpxMaterial = (): Material => ({ Layers: [{ FilterMode: 'None', TextureID: -1 }] })
+const FILTER_MODE_NONE = 0
+const FILTER_MODE_TRANSPARENT = 1
+const FILTER_MODE_BLEND = 2
+const FILTER_MODE_ADDITIVE = 3
+const FILTER_MODE_ADD_ALPHA = 4
+
+export const createDefaultJumpxMaterial = (): Material => ({ Layers: [{ FilterMode: FILTER_MODE_NONE, TextureID: -1 }] })
 
 const keyFrame = (key: { frame: number; timeMs?: number }): number =>
     Number.isFinite(key.timeMs) ? Math.round(Number(key.timeMs)) : Math.round(Number(key.frame))
@@ -38,23 +45,39 @@ const normalizedSampleFrame = (key: { frame: number; timeMs?: number }): number 
 const sampleVecValue = (key: TextureAnimSampleKey, axis: 0 | 1): number =>
     Array.isArray(key.value) ? Number(key.value[axis]) : 0
 
-const mapFilterMode = (flags: number): string => {
-    if ((flags & RENDER_ADD) !== 0) return 'Additive'
-    if ((flags & RENDER_ALPHAKEY) !== 0) return 'AddAlpha'
-    if ((flags & RENDER_MODULATE4X) !== 0) return 'Modulate2x'
-    if ((flags & RENDER_MODULATE2X) !== 0) return 'Modulate2x'
-    if ((flags & RENDER_MODULATE) !== 0) return 'Modulate'
-    if ((flags & (RENDER_ALPHABLEND | RENDER_BLEND)) !== 0) return 'Blend'
-    if ((flags & RENDER_ALPHATEST) !== 0) return 'Transparent'
-    return 'None'
+const materialAlphaKeys = (material: JumpxMaterialDto): JumpxMaterialDto['alphaKeys'] =>
+    material.alphaKeys ?? []
+
+const materialColorKeys = (material: JumpxMaterialDto): JumpxMaterialDto['colorKeys'] =>
+    material.colorKeys ?? []
+
+const materialUvOffsetKeys = (material: JumpxMaterialDto): JumpxMaterialDto['uvOffsetKeys'] =>
+    material.uvOffsetKeys ?? []
+
+const materialBlendKeys = (material: JumpxMaterialDto): JumpxMaterialDto['blendKeys'] =>
+    material.blendKeys ?? []
+
+const materialBlendFlags = (material: JumpxMaterialDto): number =>
+    materialBlendKeys(material).reduce((flags, key) => flags | (Number(key.value) >>> 0), 0)
+
+const materialAllFlags = (material: JumpxMaterialDto): number =>
+    material.rawFlags | material.saveFlags | materialBlendFlags(material)
+
+export const getJumpxMaterialTextureFlags = (material: JumpxMaterialDto, repeatFlags: number): number =>
+    (materialBlendFlags(material) & RENDER_UVCLAMP) !== 0 ? 0 : repeatFlags
+
+const mapFilterMode = (flags: number): number => {
+    if ((flags & RENDER_ADD) !== 0) return FILTER_MODE_ADDITIVE
+    if ((flags & RENDER_ALPHAKEY) !== 0) return FILTER_MODE_ADD_ALPHA
+    // JumpX's reference renderer leaves the Modulate/Modulate2x blend funcs disabled.
+    // Mapping them to War3 Modulate modes makes large translucent planes darken the scene.
+    if ((flags & (RENDER_ALPHABLEND | RENDER_BLEND)) !== 0) return FILTER_MODE_BLEND
+    if ((flags & RENDER_ALPHATEST) !== 0) return FILTER_MODE_TRANSPARENT
+    return FILTER_MODE_NONE
 }
 
-const mapMaterialFilterMode = (material: JumpxMaterialDto, mappedMaterialIndex: number): string => {
-    if (material.rawFlags === 0x14000 && material.saveFlags === 0 && mappedMaterialIndex === 2) {
-        return 'AddAlpha'
-    }
-    return mapFilterMode(material.rawFlags | material.saveFlags)
-}
+const mapMaterialFilterMode = (material: JumpxMaterialDto): number =>
+    mapFilterMode(materialAllFlags(material))
 
 const hasMeaningfulAlpha = (keys: JumpxMaterialDto['alphaKeys']): boolean =>
     keys.some((key) => Number.isFinite(key.value) && Math.abs(key.value - 1) > 1e-6)
@@ -95,6 +118,12 @@ const compactColorKeys = (keys: Array<{ frame: number; value: [number, number, n
     return compacted
 }
 
+const toWar3GeosetAnimColor = (value: [number, number, number]): [number, number, number] => [
+    value[2],
+    value[1],
+    value[0],
+]
+
 const buildScalarTrack = (keys: JumpxMaterialDto['alphaKeys']): MaterialLayer['Alpha'] | undefined => {
     if (keys.length === 0 || !hasMeaningfulAlpha(keys)) return undefined
     const compacted = compactScalarKeys(keys.map((key) => ({
@@ -109,20 +138,58 @@ const buildScalarTrack = (keys: JumpxMaterialDto['alphaKeys']): MaterialLayer['A
     }
 }
 
+const geosetVisibilitySamples = (
+    geometry: JumpxStaticSceneResult['geometries'][number] | undefined,
+    bones: JumpxStaticSceneResult['bones'] = [],
+): Array<{ frame: number; value: number }> => {
+    const samplesByFrame = new Map<number, number>()
+    const setSample = (frame: number, value: number): void => {
+        samplesByFrame.set(frame, value > 0 ? 1 : 0)
+    }
+
+    const ancestorBone = geometry && geometry.ancestorBoneId >= 0
+        ? bones.find((bone) => bone.boneIndex === geometry.ancestorBoneId)
+        : undefined
+    for (const key of ancestorBone?.visibilityKeys ?? []) {
+        setSample(normalizedSampleFrame(key), key.value > 0 ? 1 : 0)
+    }
+
+    return compactScalarKeys(Array.from(samplesByFrame, ([frame, value]) => ({ frame, value })))
+}
+
+const buildGeosetAlpha = (
+    geometry: JumpxStaticSceneResult['geometries'][number] | undefined,
+    bones: JumpxStaticSceneResult['bones'] = [],
+): GeosetAnimation['Alpha'] => {
+    const compacted = geosetVisibilitySamples(geometry, bones)
+    if (compacted.length === 0) return 1
+    if (compacted.length === 1) return compacted[0].value
+    return {
+        LineType: MATERIAL_LINEAR_LINE_TYPE,
+        InterpolationType: MATERIAL_LINEAR_LINE_TYPE,
+        GlobalSeqId: null,
+        Keys: compacted.map((key) => ({ Frame: key.frame, Vector: new Float32Array([key.value]) })),
+    }
+}
+
 const buildTextureAnimTranslation = (
     material: JumpxMaterialDto,
     uvSpeed: [number, number] | undefined,
 ): TextureAnimation | null => {
     const hasUvSpeed = !!uvSpeed && (Math.abs(uvSpeed[0]) > 1e-6 || Math.abs(uvSpeed[1]) > 1e-6)
-    const hasUvOffsetKeys = material.uvOffsetKeys.length > 0
-        && material.uvOffsetKeys.some((key) => Math.abs(key.value[0]) > 1e-6 || Math.abs(key.value[1]) > 1e-6)
-    if (!hasUvSpeed && !hasUvOffsetKeys) return null
+    const uvOffsetKeys = materialUvOffsetKeys(material)
+    const alphaKeys = materialAlphaKeys(material)
+    const colorKeys = materialColorKeys(material)
+    const hasUvOffsetKeys = uvOffsetKeys.length > 0
+        && uvOffsetKeys.some((key) => Math.abs(key.value[0]) > 1e-6 || Math.abs(key.value[1]) > 1e-6)
+    const hasMaterialSamples = uvOffsetKeys.length > 0 || alphaKeys.length > 0 || colorKeys.length > 0
+    if (!hasUvSpeed && !hasUvOffsetKeys && !hasMaterialSamples && material.sampleCount <= 0) return null
 
-    const sourceKeys: TextureAnimSampleKey[] = material.uvOffsetKeys.length > 0
-        ? material.uvOffsetKeys
-        : material.alphaKeys.length > 0
-            ? material.alphaKeys
-            : material.colorKeys
+    const sourceKeys: TextureAnimSampleKey[] = uvOffsetKeys.length > 0
+        ? uvOffsetKeys
+        : alphaKeys.length > 0
+            ? alphaKeys
+            : colorKeys
     const fallbackSampleKeys: TextureAnimSampleKey[] = [
         { frame: DEFAULT_JUMPX_START_FRAME, value: [0, 0, 0] },
         { frame: DEFAULT_JUMPX_START_FRAME + Math.max(1, material.sampleCount - 1), value: [0, 0, 0] },
@@ -185,17 +252,16 @@ const buildMaterialLayer = (
     textureIdByJumpxIndex: Map<number, number>,
     textureAnimIdByMaterialIndex: Map<number, number>,
 ): MaterialLayer => {
-    const flags = material.rawFlags | material.saveFlags
     const layer: MaterialLayer = {
-        FilterMode: mapMaterialFilterMode(material, materialIndex),
+        FilterMode: mapMaterialFilterMode(material),
         TextureID: textureIdByJumpxIndex.get(material.textureId) ?? -1,
         CoordId: 0,
-        Shading: 145,
+        Shading: DEFAULT_JUMPX_LAYER_SHADING,
         Unshaded: true,
         TwoSided: true,
         NoDepthSet: true,
     }
-    const alphaTrack = buildScalarTrack(material.alphaKeys)
+    const alphaTrack = buildScalarTrack(materialAlphaKeys(material))
     if (alphaTrack) layer.Alpha = alphaTrack
     else if (material.alpha !== undefined) layer.Alpha = Math.max(0, Math.min(1, material.alpha))
     const textureAnimId = textureAnimIdByMaterialIndex.get(material.materialIndex)
@@ -203,10 +269,6 @@ const buildMaterialLayer = (
         layer.TVertexAnimId = textureAnimId
         layer.TextureAnimationId = textureAnimId
     }
-    if ((flags & RENDER_TWOSIDED) !== 0) layer.TwoSided = true
-    if ((flags & RENDER_UNSHADED) !== 0) layer.Unshaded = true
-    if ((flags & RENDER_UNFOGGED) !== 0) layer.Unfogged = true
-    if ((flags & RENDER_ALPHABLEND) !== 0 && (flags & RENDER_ZWRITEENABLE) === 0) layer.NoDepthSet = true
     return layer
 }
 
@@ -222,7 +284,7 @@ export const buildJumpxMaterials = (
     for (const material of scene.materials) {
         const mappedMaterialIndex = materialIdRemap.get(material.materialIndex)
         if (mappedMaterialIndex === undefined) continue
-        const flags = material.rawFlags | material.saveFlags
+        const flags = materialAllFlags(material)
         if ((flags & RENDER_UVCLAMP) !== 0) {
             diagnostics.push(warning('material', `JumpX material "${material.name || material.materialIndex}" uses UV clamp flags; first-pass War3 layer mapping keeps this as a diagnostic only.`))
         }
@@ -236,7 +298,9 @@ export const buildJumpxMaterials = (
 
 export const buildJumpxGeosetAnims = (
     geosets: ModelData['Geosets'],
+    geosetSourceGeometries: JumpxStaticSceneResult['geometries'] = [],
     materials: JumpxMaterialDto[] = [],
+    bones: JumpxStaticSceneResult['bones'] = [],
     materialIdRemap: Map<number, number> = new Map(),
 ): GeosetAnimation[] => {
     const materialByMappedIndex = new Map<number, JumpxMaterialDto>()
@@ -246,13 +310,15 @@ export const buildJumpxGeosetAnims = (
     }
     return (geosets ?? []).map((geoset, geosetId) => {
         const material = materialByMappedIndex.get(Number(geoset.MaterialID))
-        const compactedColorKeys = compactColorKeys((material?.colorKeys ?? []).map((key) => ({
+        const geometry = geosetSourceGeometries[geosetId]
+        const useColor = (geometry?.geometryType ?? XGEO_NORMAL_MESH) !== XGEO_NORMAL_MESH
+        const compactedColorKeys = compactColorKeys((material ? materialColorKeys(material) : []).map((key) => ({
             frame: normalizedSampleFrame(key),
-            value: [
+            value: toWar3GeosetAnimColor([
                 Math.max(0, Math.min(1, Number(key.value[0]))),
                 Math.max(0, Math.min(1, Number(key.value[1]))),
                 Math.max(0, Math.min(1, Number(key.value[2]))),
-            ],
+            ]),
         })))
         const color = compactedColorKeys.length > 1
             ? {
@@ -265,9 +331,9 @@ export const buildJumpxGeosetAnims = (
 
         return {
             GeosetId: geosetId,
-            Alpha: 1,
-            Flags: 2,
-            UseColor: true,
+            Alpha: buildGeosetAlpha(geometry, bones),
+            Flags: useColor ? 2 : 0,
+            UseColor: useColor,
             DropShadow: false,
             Color: color,
         } as GeosetAnimation & { Flags: number }
