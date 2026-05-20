@@ -34,7 +34,12 @@ fn jumpx_import_fixture_core_sections() {
     assert_eq!(result.materials[0].alpha_keys.len(), 101);
     assert_eq!(result.materials[0].alpha_keys[0].time_ms, Some(10666.667));
     assert_eq!(result.materials[0].alpha_keys[0].value, 0.0);
-    assert!(result.materials[0].color_keys.is_empty());
+    assert_eq!(result.materials[0].color_keys.len(), 101);
+    assert_eq!(result.materials[0].uv_offset_keys.len(), 101);
+    assert!((result.materials[0].color_keys[0].value[0] - (99.0 / 255.0)).abs() < 0.0001);
+    assert!((result.materials[0].color_keys[0].value[1] - 0.0).abs() < 0.0001);
+    assert!((result.materials[0].color_keys[0].value[2] - 0.0).abs() < 0.0001);
+    assert_eq!(result.materials[0].uv_offset_keys[0].value, [0.0, 0.0, 0.0]);
     assert!((result.materials[0].alpha_keys[2].value - (127.0 / 255.0)).abs() < 0.0001);
     assert!((result.materials[1].alpha_keys[2].value - 1.0).abs() < 0.0001);
     assert_eq!(result.bones.len(), 11);

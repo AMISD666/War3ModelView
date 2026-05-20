@@ -18,19 +18,25 @@ const RENDER_UNFOGGED = 0x1000000
 const RENDER_ZWRITEENABLE = 0x2000000
 const RENDER_UVCLAMP = 0x4000000
 const MATERIAL_LINEAR_LINE_TYPE = 1
+const DEFAULT_JUMPX_START_FRAME = 320
+const DEFAULT_JUMPX_FPS = 30
 
-const REFERENCE_GEOSET_ANIM_COLORS: Array<[number, number, number]> = [
-    [0.38823530077934265, 0, 0],
-    [0.38823530077934265, 0, 0],
-    [0.8196078538894653, 0.8196078538894653, 0.8196078538894653],
-    [0.8196078538894653, 0.8196078538894653, 0.8196078538894653],
-    [0.38823530077934265, 0, 0],
-]
+type TextureAnimSampleKey = {
+    frame: number
+    timeMs?: number
+    value: number | [number, number, number]
+}
 
 export const createDefaultJumpxMaterial = (): Material => ({ Layers: [{ FilterMode: 'None', TextureID: -1 }] })
 
 const keyFrame = (key: { frame: number; timeMs?: number }): number =>
     Number.isFinite(key.timeMs) ? Math.round(Number(key.timeMs)) : Math.round(Number(key.frame))
+
+const normalizedSampleFrame = (key: { frame: number; timeMs?: number }): number =>
+    Math.round((Math.max(0, Number(key.frame) - DEFAULT_JUMPX_START_FRAME) / DEFAULT_JUMPX_FPS) * 1000)
+
+const sampleVecValue = (key: TextureAnimSampleKey, axis: 0 | 1): number =>
+    Array.isArray(key.value) ? Number(key.value[axis]) : 0
 
 const mapFilterMode = (flags: number): string => {
     if ((flags & RENDER_ADD) !== 0) return 'Additive'
@@ -70,10 +76,29 @@ const compactScalarKeys = (keys: Array<{ frame: number; value: number }>): Array
     return compacted
 }
 
+const compactColorKeys = (keys: Array<{ frame: number; value: [number, number, number] }>): Array<{ frame: number; value: [number, number, number] }> => {
+    const sorted = keys
+        .filter((key) => Number.isFinite(key.frame) && key.value.every(Number.isFinite))
+        .sort((a, b) => a.frame - b.frame)
+    if (sorted.length <= 2) return sorted
+
+    const compacted: Array<{ frame: number; value: [number, number, number] }> = []
+    for (let index = 0; index < sorted.length; index += 1) {
+        const previous = sorted[index - 1]
+        const current = sorted[index]
+        const next = sorted[index + 1]
+        if (previous && next
+            && current.value.every((value, axis) => Math.abs(value - previous.value[axis]) < 1e-6)
+            && current.value.every((value, axis) => Math.abs(value - next.value[axis]) < 1e-6)) continue
+        compacted.push(current)
+    }
+    return compacted
+}
+
 const buildScalarTrack = (keys: JumpxMaterialDto['alphaKeys']): MaterialLayer['Alpha'] | undefined => {
     if (keys.length === 0 || !hasMeaningfulAlpha(keys)) return undefined
     const compacted = compactScalarKeys(keys.map((key) => ({
-        frame: keyFrame(key),
+        frame: normalizedSampleFrame(key),
         value: Math.max(0, Math.min(1, Number(key.value))),
     })))
     return {
@@ -85,41 +110,53 @@ const buildScalarTrack = (keys: JumpxMaterialDto['alphaKeys']): MaterialLayer['A
 }
 
 const buildTextureAnimTranslation = (
-    keys: JumpxMaterialDto['alphaKeys'],
+    material: JumpxMaterialDto,
     uvSpeed: [number, number] | undefined,
 ): TextureAnimation | null => {
-    if (!uvSpeed || (Math.abs(uvSpeed[0]) <= 1e-6 && Math.abs(uvSpeed[1]) <= 1e-6)) return null
-    const compacted = compactScalarKeys(keys.map((key) => ({
-        frame: keyFrame(key),
-        value: (Math.max(0, Number(key.frame) - 320) / 100) * uvSpeed[1] * 3.125,
-    })))
-    if (compacted.length === 0) return null
-    return {
-        Translation: {
-            LineType: MATERIAL_LINEAR_LINE_TYPE,
-            InterpolationType: MATERIAL_LINEAR_LINE_TYPE,
-            GlobalSeqId: null,
-            Keys: compacted.map((key) => ({
-                Frame: key.frame,
-                Vector: new Float32Array([0, key.value, 0]),
-            })),
-        },
-    }
-}
+    const hasUvSpeed = !!uvSpeed && (Math.abs(uvSpeed[0]) > 1e-6 || Math.abs(uvSpeed[1]) > 1e-6)
+    const hasUvOffsetKeys = material.uvOffsetKeys.length > 0
+        && material.uvOffsetKeys.some((key) => Math.abs(key.value[0]) > 1e-6 || Math.abs(key.value[1]) > 1e-6)
+    if (!hasUvSpeed && !hasUvOffsetKeys) return null
 
-const buildZeroTextureAnim = (keys: JumpxMaterialDto['alphaKeys']): TextureAnimation => {
-    const compacted = compactScalarKeys(keys.map((key) => ({
-        frame: keyFrame(key),
-        value: 0,
+    const sourceKeys: TextureAnimSampleKey[] = material.uvOffsetKeys.length > 0
+        ? material.uvOffsetKeys
+        : material.alphaKeys.length > 0
+            ? material.alphaKeys
+            : material.colorKeys
+    const fallbackSampleKeys: TextureAnimSampleKey[] = [
+        { frame: DEFAULT_JUMPX_START_FRAME, value: [0, 0, 0] },
+        { frame: DEFAULT_JUMPX_START_FRAME + Math.max(1, material.sampleCount - 1), value: [0, 0, 0] },
+    ]
+    const sampleKeys = sourceKeys.length > 0
+        ? sourceKeys
+        : fallbackSampleKeys
+    const uvSpeedX = uvSpeed?.[0] ?? 0
+    const uvSpeedY = uvSpeed?.[1] ?? 0
+    const compactedX = compactScalarKeys(sampleKeys.map((key) => ({
+        frame: normalizedSampleFrame(key),
+        value: sampleVecValue(key, 0) + (Math.max(0, Number(key.frame) - DEFAULT_JUMPX_START_FRAME) / 100) * uvSpeedX * 3.125,
     })))
+    const compactedY = compactScalarKeys(sampleKeys.map((key) => ({
+        frame: normalizedSampleFrame(key),
+        value: sampleVecValue(key, 1) + (Math.max(0, Number(key.frame) - DEFAULT_JUMPX_START_FRAME) / 100) * uvSpeedY * 3.125,
+    })))
+    const frameByIndex = new Map<number, [number, number]>()
+    compactedX.forEach((key) => frameByIndex.set(key.frame, [key.value, 0]))
+    compactedY.forEach((key) => {
+        const existing = frameByIndex.get(key.frame) ?? [0, 0]
+        existing[1] = key.value
+        frameByIndex.set(key.frame, existing)
+    })
+    const frames = Array.from(frameByIndex.entries()).sort((a, b) => a[0] - b[0])
+    if (frames.length === 0) return null
     return {
         Translation: {
             LineType: MATERIAL_LINEAR_LINE_TYPE,
             InterpolationType: MATERIAL_LINEAR_LINE_TYPE,
             GlobalSeqId: null,
-            Keys: compacted.map((key) => ({
-                Frame: key.frame,
-                Vector: new Float32Array([0, 0, 0]),
+            Keys: frames.map(([frame, value]) => ({
+                Frame: frame,
+                Vector: new Float32Array([value[0], value[1], 0]),
             })),
         },
     }
@@ -129,24 +166,15 @@ export const buildJumpxTextureAnims = (scene: JumpxStaticSceneResult): {
     textureAnims: TextureAnimation[]
     textureAnimIdByMaterialIndex: Map<number, number>
 } => {
-    const textureAnims: TextureAnimation[] = [
-        buildZeroTextureAnim(scene.materials.find((material) => material.materialIndex === 0)?.alphaKeys ?? []),
-        buildZeroTextureAnim(scene.materials.find((material) => material.materialIndex === 2)?.alphaKeys ?? []),
-        buildZeroTextureAnim(scene.materials.find((material) => material.materialIndex === 4)?.alphaKeys ?? []),
-    ]
+    const textureAnims: TextureAnimation[] = []
     const textureAnimIdByMaterialIndex = new Map<number, number>()
-    textureAnimIdByMaterialIndex.set(0, 0)
-    textureAnimIdByMaterialIndex.set(2, 1)
-    textureAnimIdByMaterialIndex.set(4, 2)
-    textureAnimIdByMaterialIndex.set(3, 1)
 
-    const scrollingMaterial = scene.materials.find((material) => material.materialIndex === 1)
-    if (scrollingMaterial) {
-        const textureAnim = buildTextureAnimTranslation(scrollingMaterial.alphaKeys, scrollingMaterial.uvSpeed)
-        if (!textureAnim) return { textureAnims, textureAnimIdByMaterialIndex }
+    for (const material of scene.materials) {
+        const textureAnim = buildTextureAnimTranslation(material, material.uvSpeed)
+        if (!textureAnim) continue
         const textureAnimId = textureAnims.length
         textureAnims.push(textureAnim)
-        textureAnimIdByMaterialIndex.set(scrollingMaterial.materialIndex, textureAnimId)
+        textureAnimIdByMaterialIndex.set(material.materialIndex, textureAnimId)
     }
     return { textureAnims, textureAnimIdByMaterialIndex }
 }
@@ -208,11 +236,40 @@ export const buildJumpxMaterials = (
 
 export const buildJumpxGeosetAnims = (
     geosets: ModelData['Geosets'],
-): GeosetAnimation[] => (geosets ?? []).map((_, geosetId) => ({
-    GeosetId: geosetId,
-    Alpha: 1,
-    Flags: 2,
-    UseColor: true,
-    DropShadow: false,
-    Color: new Float32Array(REFERENCE_GEOSET_ANIM_COLORS[geosetId] ?? [1, 1, 1]),
-}) as GeosetAnimation & { Flags: number })
+    materials: JumpxMaterialDto[] = [],
+    materialIdRemap: Map<number, number> = new Map(),
+): GeosetAnimation[] => {
+    const materialByMappedIndex = new Map<number, JumpxMaterialDto>()
+    for (const material of materials) {
+        const mappedIndex = materialIdRemap.get(material.materialIndex) ?? material.materialIndex
+        materialByMappedIndex.set(mappedIndex, material)
+    }
+    return (geosets ?? []).map((geoset, geosetId) => {
+        const material = materialByMappedIndex.get(Number(geoset.MaterialID))
+        const compactedColorKeys = compactColorKeys((material?.colorKeys ?? []).map((key) => ({
+            frame: normalizedSampleFrame(key),
+            value: [
+                Math.max(0, Math.min(1, Number(key.value[0]))),
+                Math.max(0, Math.min(1, Number(key.value[1]))),
+                Math.max(0, Math.min(1, Number(key.value[2]))),
+            ],
+        })))
+        const color = compactedColorKeys.length > 1
+            ? {
+                LineType: MATERIAL_LINEAR_LINE_TYPE,
+                InterpolationType: MATERIAL_LINEAR_LINE_TYPE,
+                GlobalSeqId: null,
+                Keys: compactedColorKeys.map((key) => ({ Frame: key.frame, Vector: new Float32Array(key.value) })),
+            }
+            : new Float32Array(compactedColorKeys[0]?.value ?? [1, 1, 1])
+
+        return {
+            GeosetId: geosetId,
+            Alpha: 1,
+            Flags: 2,
+            UseColor: true,
+            DropShadow: false,
+            Color: color,
+        } as GeosetAnimation & { Flags: number }
+    })
+}

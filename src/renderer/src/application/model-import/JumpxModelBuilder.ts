@@ -158,7 +158,7 @@ export const buildJumpxStaticModelData = (
     modelData.Geosets = scene.geometries.flatMap((geometry) =>
         mapJumpxGeometryToGeosets(geometry, Math.min(Math.max(0, materialIdRemap.get(geometry.materialId) ?? geometry.materialId), maxMaterialId), nodeMapping, diagnostics))
     modelData.Model.NumGeosets = modelData.Geosets.length
-    modelData.GeosetAnims = buildJumpxGeosetAnims(modelData.Geosets)
+    modelData.GeosetAnims = buildJumpxGeosetAnims(modelData.Geosets, scene.materials, materialIdRemap)
     modelData.Model.NumGeosetAnims = modelData.GeosetAnims.length
 
     const firstParticleObjectId = nodeMapping.nodes.length

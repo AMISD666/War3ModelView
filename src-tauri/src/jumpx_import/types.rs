@@ -71,6 +71,7 @@ pub struct JumpxMaterialDto {
     pub alpha: Option<f32>,
     pub color_keys: Vec<JumpxVec3KeyDto>,
     pub alpha_keys: Vec<JumpxScalarKeyDto>,
+    pub uv_offset_keys: Vec<JumpxVec3KeyDto>,
     pub uv_speed: Option<[f32; 2]>,
 }
 

@@ -60,6 +60,7 @@ export interface JumpxMaterialDto {
     alpha?: number
     colorKeys: JumpxVec3KeyDto[]
     alphaKeys: JumpxScalarKeyDto[]
+    uvOffsetKeys: JumpxVec3KeyDto[]
     uvSpeed?: [number, number]
 }
 
