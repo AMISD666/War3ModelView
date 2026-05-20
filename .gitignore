@@ -72,6 +72,7 @@ scripts/*
 !scripts/check-pe2-tail-rendering.mjs
 !scripts/check-retarget-mode-renderer-cache.mjs
 !scripts/check-keyframe-transform-tangents.mjs
+!scripts/check-jumpx-pe2-width-length.mjs
 local-test-scripts/
 activation/
 

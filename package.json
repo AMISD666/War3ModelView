@@ -11,6 +11,7 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "sync:war3-model": "node scripts/sync-war3-model-vendor.mjs",
     "check:material-render-state": "node scripts/check-material-render-state.mjs",
+    "check:jumpx-pe2-width-length": "node scripts/check-jumpx-pe2-width-length.mjs",
     "dev:vite": "vite",
     "dev": "npm run dev:vite",
     "tauri": "tauri",

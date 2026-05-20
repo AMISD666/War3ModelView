@@ -285,16 +285,10 @@ const particleRotationTrack = (
     return buildStaticQuatTrack(33, staticParticleRotation(particle))
 }
 
-const particleWidth = (particle: JumpxParticleDto): number =>
-    referenceName(particle.name) === 'part_8huaban' ? finite(particle.height, 0) : finite(particle.width, 0)
-
-const particleLength = (particle: JumpxParticleDto): number =>
-    referenceName(particle.name) === 'part_8huaban' ? finite(particle.width, 0) : finite(particle.height, 0)
-
 const uvSequenceCellCount = (particle: JumpxParticleDto): number => {
-    const rows = Math.max(1, Math.floor(finite(particle.rows, 1)))
-    const columns = Math.max(1, Math.floor(finite(particle.columns, 1)))
-    return rows * columns
+    const jumpxUCells = Math.max(1, Math.floor(finite(particle.rows, 1)))
+    const jumpxVCells = Math.max(1, Math.floor(finite(particle.columns, 1)))
+    return jumpxUCells * jumpxVCells
 }
 
 const particleHeadLifeSpanUVAnim = (particle: JumpxParticleDto): [number, number, number] => {
@@ -368,11 +362,11 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         Gravity: finite(particle.gravity, 0),
         Latitude: finite(particle.coneAngle, 0),
         LifeSpan: finite(particle.lifeSpan, 1),
-        Width: particleWidth(particle),
-        Length: particleLength(particle),
+        Width: finite(particle.height, 0),
+        Length: finite(particle.width, 0),
         Time: finite(particle.middleTime, 0.5),
-        Rows: Math.max(1, Math.floor(finite(particle.rows, 1))),
-        Columns: Math.max(1, Math.floor(finite(particle.columns, 1))),
+        Rows: Math.max(1, Math.floor(finite(particle.columns, 1))),
+        Columns: Math.max(1, Math.floor(finite(particle.rows, 1))),
         TextureID: referenceTextureId ?? textureIdByJumpxIndex.get(particle.textureId) ?? -1,
         PriorityPlane: Math.floor(finite(particle.priorityPlane, 0)),
         FilterMode: mapFilterMode(blendMode),
