@@ -1,6 +1,17 @@
+use std::path::PathBuf;
+
 use super::{import_jumpx_static_scene, probe_jumpx_import};
 
-const FIXTURE: &str = "../testmodel/tx_207_s04_2_02_skin5.x";
+const FIXTURE: &str = "testmodel/tx_268_s04_2_01_skin2.x";
+
+fn fixture_path() -> String {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("src-tauri should have a repository parent")
+        .join(FIXTURE)
+        .to_string_lossy()
+        .into_owned()
+}
 
 #[test]
 fn jumpx_rejects_non_x_extension() {
@@ -10,60 +21,56 @@ fn jumpx_rejects_non_x_extension() {
 
 #[test]
 fn jumpx_probe_fixture_counts() {
-    let result = probe_jumpx_import(FIXTURE.to_string(), None).expect("fixture should probe");
+    let result = probe_jumpx_import(fixture_path(), None).expect("fixture should probe");
     assert_eq!(result.version, 8);
-    assert_eq!(result.texture_count, 12);
-    assert_eq!(result.material_count, 5);
-    assert_eq!(result.geometry_count, 5);
-    assert_eq!(result.bone_count, 11);
-    assert_eq!(result.bone_group_count, 2);
-    assert_eq!(result.particle_count, 10);
+    assert_eq!(result.texture_count, 15);
+    assert_eq!(result.material_count, 16);
+    assert_eq!(result.geometry_count, 26);
+    assert_eq!(result.bone_count, 12);
+    assert_eq!(result.bone_group_count, 8);
+    assert_eq!(result.particle_count, 11);
     assert_eq!(result.action_count, 0);
 }
 
 #[test]
 fn jumpx_import_fixture_core_sections() {
     let result =
-        import_jumpx_static_scene(FIXTURE.to_string(), None).expect("fixture should import");
-    assert_eq!(result.textures.len(), 12);
-    assert_eq!(result.textures[0].name, "tx_kuosan_0059.dds");
-    assert_eq!(result.geometries.len(), 5);
-    assert_eq!(result.geometries[4].name, "avmesh.tiaodai#9");
+        import_jumpx_static_scene(fixture_path(), None).expect("fixture should import");
+    assert_eq!(result.textures.len(), 15);
+    assert_eq!(result.textures[0].name, "tx_tuxing_1016.dds");
+    assert_eq!(result.geometries.len(), 26);
+    assert_eq!(result.geometries[0].name, "avmesh.andi#003");
     assert_eq!(result.geometries[0].geometry_type, 6);
-    assert_eq!(result.geometries[0].ancestor_bone_id, 7);
-    assert_eq!(result.geometries[4].vertex_count, 250);
-    assert_eq!(result.geometries[4].index_count, 744);
-    assert_eq!(result.materials[0].alpha_keys.len(), 101);
+    assert_eq!(result.geometries[0].ancestor_bone_id, 4);
+    assert_eq!(result.geometries[24].name, "avmesh.tiaodai#8");
+    assert_eq!(result.geometries[24].vertex_count, 623);
+    assert_eq!(result.geometries[24].index_count, 2406);
+    assert_eq!(result.materials[0].alpha_keys.len(), 31);
     assert_eq!(result.materials[0].alpha_keys[0].time_ms, Some(10666.667));
-    assert_eq!(result.materials[0].alpha_keys[0].value, 0.0);
-    assert_eq!(result.materials[0].color_keys.len(), 101);
-    assert_eq!(result.materials[0].uv_offset_keys.len(), 101);
-    assert_eq!(result.materials[0].blend_keys.len(), 101);
-    assert_eq!(result.materials[0].blend_keys[0].value as u32, 0x100000);
+    assert_eq!(result.materials[0].color_keys.len(), 31);
+    assert_eq!(result.materials[0].uv_offset_keys.len(), 31);
+    assert_eq!(result.materials[0].blend_keys.len(), 31);
     assert!(result
         .materials
         .iter()
         .flat_map(|material| material.blend_keys.iter())
         .any(|key| (key.value as u32 & 0x40000) != 0));
-    assert!((result.materials[0].color_keys[0].value[0] - (99.0 / 255.0)).abs() < 0.0001);
-    assert!((result.materials[0].color_keys[0].value[1] - 0.0).abs() < 0.0001);
-    assert!((result.materials[0].color_keys[0].value[2] - 0.0).abs() < 0.0001);
-    assert_eq!(result.materials[0].uv_offset_keys[0].value, [0.0, 0.0, 0.0]);
-    assert!((result.materials[0].alpha_keys[2].value - (127.0 / 255.0)).abs() < 0.0001);
-    assert!((result.materials[1].alpha_keys[2].value - 1.0).abs() < 0.0001);
-    assert_eq!(result.bones.len(), 11);
-    assert_eq!(result.bones[0].name, "Bone001");
-    assert_eq!(result.bones[0].position_keys.len(), 101);
-    assert_eq!(result.bones[0].rotation_keys.len(), 101);
-    assert_eq!(result.bones[0].scale_keys.len(), 101);
-    assert_eq!(result.particles.len(), 10);
-    assert_eq!(result.particles[0].name, "part.1yun");
-    assert_eq!(result.particles[0].visibility_keys.len(), 101);
-    assert_eq!(result.particles[0].emission_rate_keys.len(), 101);
+    assert_eq!(result.bones.len(), 12);
+    assert_eq!(result.bones[0].name, "Bone002");
+    assert_eq!(result.bones[0].position_keys.len(), 31);
+    assert_eq!(result.bones[0].rotation_keys.len(), 31);
+    assert_eq!(result.bones[0].scale_keys.len(), 31);
+    assert_eq!(result.particles.len(), 11);
+    assert_eq!(result.particles[0].name, "part.9lizi009");
+    assert_eq!(result.particles[0].texture_id, 6);
+    assert_eq!(result.particles[0].visibility_keys.len(), 31);
+    assert_eq!(result.particles[0].emission_rate_keys.len(), 31);
     assert_eq!(result.particles[0].visibility_keys[0].frame, 320);
     assert_eq!(result.particles[0].visibility_keys[0].time_ms, Some(10666.667));
     assert_eq!(result.particles[0].visibility_keys[0].value, 0.0);
-    assert_eq!(result.particles[0].visibility_keys[3].value, 1.0);
-    assert_eq!(result.particles[0].emission_rate_keys[3].value, 6.0);
+    assert_eq!(result.particles[0].visibility_keys[2].value, 1.0);
+    assert_eq!(result.particles[0].emission_rate_keys[2].value, 40.0);
+    assert_eq!(result.particles[8].name, "part.lizi001");
+    assert_eq!(result.particles[8].visibility_keys.len(), 0);
     assert!(result.actions.is_empty());
 }

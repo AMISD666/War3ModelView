@@ -714,7 +714,8 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
 
             // Map FrameFlags
             if (item.FrameFlags !== undefined) {
-                node.Head = (item.FrameFlags & 1) !== 0;
+                // Warcraft III PE2 emitters need Head enabled to render; treat tail-only data as head+tail.
+                node.Head = true;
                 node.Tail = (item.FrameFlags & 2) !== 0;
             }
 

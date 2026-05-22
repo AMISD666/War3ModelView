@@ -99,7 +99,7 @@ const main = async () => {
     await buildImportBundle()
     const { mapJumpxParticlesToParticleEmitter2 } = await import(pathToFileURL(bundlePath).href)
     const particles = [
-        makeParticle('part.8huaban', 20.106627, 17.396976, 4, 2),
+        makeParticle('part.8huaban', 20.106627, 17.396976, 4, 2, { speed: 100 }),
         makeParticle('part.any_other_plane', 126.422134, 92.530380),
     ]
     const mapped = mapJumpxParticlesToParticleEmitter2(
@@ -116,6 +116,7 @@ const main = async () => {
     }
     close(huaban.Width, 17.396976, 'part.8huaban Width')
     close(huaban.Length, 20.106627, 'part.8huaban Length')
+    close(huaban.Speed, 100, 'part.8huaban Speed should preserve source JumpX value')
     close(huaban.Rows, 2, 'part.8huaban Rows should use JumpX V cells')
     close(huaban.Columns, 4, 'part.8huaban Columns should use JumpX U cells')
     if (JSON.stringify(huaban.LifeSpanUVAnim) !== JSON.stringify([0, 3, 1])) {
@@ -131,6 +132,23 @@ const main = async () => {
     }
     if (generic.LineEmitter || (generic.Flags & 0x20000) !== 0) {
         fail('JumpX flag 0 particles should not be forced to War3 PE2 LineEmitter')
+    }
+    const velocityAligned = mapJumpxParticlesToParticleEmitter2(
+        [
+            makeParticle('part.velocity_aligned', 1, 1, 1, 1, {
+                partFlags: 0x10000,
+            }),
+        ],
+        30,
+        { defaultObjectId: 0, objectIdByBoneId: new Map([[0, 0]]) },
+        new Map([[0, 0]]),
+        [],
+    )[0]
+    if (velocityAligned.Head !== true || (velocityAligned.FrameFlags & 1) === 0) {
+        fail(`JumpX PE2 must always keep War3 Head enabled, got Head=${velocityAligned.Head} FrameFlags=${velocityAligned.FrameFlags}`)
+    }
+    if (velocityAligned.Tail !== true || (velocityAligned.FrameFlags & 2) === 0) {
+        fail(`JumpX PE2 should preserve source tail/velocity flag as Tail, got Tail=${velocityAligned.Tail} FrameFlags=${velocityAligned.FrameFlags}`)
     }
 
     const directional = mapJumpxParticlesToParticleEmitter2(
@@ -151,7 +169,9 @@ const main = async () => {
     vectorClose(rotateVec3(rotation, [0, 0, 1]), [0, 1, 0], 'JumpX normal should become local +Z emission direction')
     close(directional.Rotation.Keys[0].Frame, 0, 'static PE2 rotation identity guard frame')
     close(directional.Rotation.Keys[1].Frame, 10667, 'static PE2 rotation should be sampleable inside the JumpX sequence')
-    close(directional.Translation.Keys[1].Frame, 10667, 'static PE2 translation should be sampleable inside the JumpX sequence')
+    if (directional.Translation !== undefined) {
+        fail(`JumpX PE2 should not invent an all-zero Translation track: ${JSON.stringify(directional.Translation)}`)
+    }
     console.log('JumpX PE2 width/length mapping check passed')
 }
 

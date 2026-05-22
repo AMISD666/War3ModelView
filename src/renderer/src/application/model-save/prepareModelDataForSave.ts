@@ -506,6 +506,8 @@ export function prepareModelDataForSave(modelData: any): any {
             if (emitter.Head === undefined && emitter.Tail === undefined) {
                 frameFlags = emitter.FrameFlags || 0;
             }
+            // Warcraft III PE2 particles require the Head bit; Tail-only emitters do not render reliably.
+            frameFlags |= 1;
             emitter.FrameFlags = frameFlags;
 
             // Fix Squirt

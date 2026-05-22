@@ -88,6 +88,7 @@ export interface JumpxGeometryDto {
     boundsRadius: number
     objectPivot: [number, number, number]
     objectScale: [number, number, number]
+    inverseBindMatrix?: number[]
     rawFlags: number
     saveFlags: number
 }

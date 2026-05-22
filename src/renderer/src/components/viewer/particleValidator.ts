@@ -63,9 +63,8 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
 
     emitter.Flags = flags
 
-    // Fix 3: Reconstruct FrameFlags from Head/Tail booleans without
-    // forcing a default head segment. In Warcraft III, disabling both
-    // head and tail should make the particle invisible.
+    // Fix 3: Reconstruct FrameFlags from Head/Tail booleans. Warcraft III PE2
+    // emitters must keep Head enabled or the particle will not render.
     let frameFlags = typeof emitter.FrameFlags === 'number' ? (emitter.FrameFlags & 0x3) : 0
     if (emitter.Head === true) {
         frameFlags |= 1
@@ -77,7 +76,10 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
     } else if (emitter.Tail === false) {
         frameFlags &= ~2
     }
+    frameFlags |= 1
     emitter.FrameFlags = frameFlags
+    emitter.Head = true
+    emitter.Tail = (frameFlags & 2) !== 0
 
     PE2_ANIM_VECTOR_FIELDS.forEach((f) => normalizeAnimVectorKeysInPlace(emitter[f]))
 

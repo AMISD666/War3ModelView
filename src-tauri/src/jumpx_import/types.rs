@@ -101,6 +101,7 @@ pub struct JumpxGeometryDto {
     pub bounds_radius: f32,
     pub object_pivot: [f32; 3],
     pub object_scale: [f32; 3],
+    pub inverse_bind_matrix: Option<Vec<f32>>,
     pub raw_flags: u32,
     pub save_flags: u32,
 }

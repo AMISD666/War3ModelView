@@ -1,6 +1,7 @@
 import type { JumpxBoneDto, JumpxStaticSceneResult } from '../../types/jumpxImport'
 import { NodeType, type ModelNode } from '../../types/node'
-import { transformJumpxVec3 } from './JumpxCoordinateTransform'
+
+const DONT_INHERIT_ALL = 1 | 2 | 4
 
 export type JumpxNodeMapping = {
     bones: ModelNode[]
@@ -9,6 +10,7 @@ export type JumpxNodeMapping = {
     pivotPoints: [number, number, number][]
     defaultObjectId: number
     objectIdByBoneId: Map<number, number>
+    meshObjectIdByBoneId: Map<number, number>
 }
 
 const uniqueBoneName = (bone: JumpxBoneDto, objectId: number): string => {
@@ -25,13 +27,6 @@ const createStaticRootHelper = (): ModelNode => ({
     Flags: 0,
 })
 
-const nodePivot = (bone: JumpxBoneDto): [number, number, number] => {
-    const firstPositionKey = [...bone.positionKeys]
-        .filter((key) => Number.isFinite(key.frame))
-        .sort((a, b) => a.frame - b.frame)[0]
-    return transformJumpxVec3(firstPositionKey?.value ?? bone.worldTranslation)
-}
-
 export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeMapping => {
     const bones = [...(scene.bones ?? [])].sort((a, b) => a.boneIndex - b.boneIndex)
     if (bones.length === 0) {
@@ -43,12 +38,17 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             pivotPoints: [[0, 0, 0]],
             defaultObjectId: 0,
             objectIdByBoneId: new Map(),
+            meshObjectIdByBoneId: new Map(),
         }
     }
 
     const objectIdByBoneId = new Map<number, number>()
     bones.forEach((bone, index) => {
         objectIdByBoneId.set(bone.boneIndex, index)
+    })
+    const meshObjectIdByBoneId = new Map<number, number>()
+    bones.forEach((bone, index) => {
+        meshObjectIdByBoneId.set(bone.boneIndex, bones.length + index)
     })
 
     const war3Bones: ModelNode[] = bones.map((bone) => {
@@ -57,27 +57,44 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             type: NodeType.BONE,
             Name: uniqueBoneName(bone, objectId),
             ObjectId: objectId,
-            Parent: objectIdByBoneId.get(bone.parentId) ?? -1,
-            PivotPoint: nodePivot(bone),
-            Flags: 0,
+            Parent: -1,
+            PivotPoint: [0, 0, 0],
+            Flags: DONT_INHERIT_ALL,
+            DontInherit: { Translation: true, Rotation: true, Scaling: true },
+            GeosetId: null,
+            GeosetAnimId: null,
+        }
+    })
+
+    const meshBones: ModelNode[] = bones.map((bone) => {
+        const objectId = meshObjectIdByBoneId.get(bone.boneIndex) ?? bones.length
+        return {
+            type: NodeType.BONE,
+            Name: `${uniqueBoneName(bone, objectId)}_Mesh`,
+            ObjectId: objectId,
+            Parent: -1,
+            PivotPoint: [0, 0, 0],
+            Flags: DONT_INHERIT_ALL,
+            DontInherit: { Translation: true, Rotation: true, Scaling: true },
             GeosetId: null,
             GeosetAnimId: null,
         }
     })
 
     const helpers: ModelNode[] = []
-    const nodes = [...war3Bones]
+    const nodes = [...war3Bones, ...meshBones]
     const pivotPoints: [number, number, number][] = []
     for (const node of nodes) {
         pivotPoints[node.ObjectId] = node.PivotPoint ?? [0, 0, 0]
     }
 
     return {
-        bones: war3Bones,
+        bones: [...war3Bones, ...meshBones],
         helpers,
         nodes,
         pivotPoints,
         defaultObjectId: war3Bones[0]?.ObjectId ?? 0,
         objectIdByBoneId,
+        meshObjectIdByBoneId,
     }
 }

@@ -25,9 +25,9 @@ fn read_ancestor_object_transform(
     head: &[u8],
     dir: &JumpxDirectory,
     ancestor_bone: i32,
-) -> Result<([f32; 3], [f32; 3]), String> {
+) -> Result<([f32; 3], [f32; 3], Option<Vec<f32>>), String> {
     if ancestor_bone < 0 || ancestor_bone >= dir.get("nbon") as i32 {
-        return Ok(([0.0, 0.0, 0.0], [1.0, 1.0, 1.0]));
+        return Ok(([0.0, 0.0, 0.0], [1.0, 1.0, 1.0], None));
     }
 
     let bone_offset = checked_table_offset(dir.get("abon"), ancestor_bone as usize, 0xac, "geometry ancestor bone")?;
@@ -35,7 +35,7 @@ fn read_ancestor_object_transform(
     let bind_matrix = invert_affine_matrix(inverse_matrix).unwrap_or(identity_matrix());
     let scale = matrix_axis_scales(&inverse_matrix);
     let pivot = [bind_matrix[12], bind_matrix[13], bind_matrix[14]];
-    Ok((pivot, scale))
+    Ok((pivot, scale, Some(inverse_matrix.to_vec())))
 }
 
 pub(in crate::jumpx_import) fn parse_geometries(
@@ -115,7 +115,7 @@ pub(in crate::jumpx_import) fn parse_geometries(
             } else {
                 compute_extents_from_vertices(&vertices)
             };
-        let (object_pivot, object_scale) =
+        let (object_pivot, object_scale, inverse_bind_matrix) =
             read_ancestor_object_transform(head, dir, ancestor_bone)?;
 
         out.push(JumpxGeometryDto {
@@ -142,6 +142,7 @@ pub(in crate::jumpx_import) fn parse_geometries(
                 * object_scale[0].max(object_scale[1]).max(object_scale[2]),
             object_pivot,
             object_scale,
+            inverse_bind_matrix,
             raw_flags: flag | geometry_type,
             save_flags: save_flag,
         });

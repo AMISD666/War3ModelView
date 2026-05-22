@@ -11,6 +11,40 @@ export const transformJumpxVec3 = (value: [number, number, number] | undefined):
     ]
 }
 
+export const transformJumpxMat4 = (matrix: ArrayLike<number>): [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number] => {
+    const get = (index: number): number => {
+        const value = Number(matrix[index])
+        return Number.isFinite(value) ? value : (index % 5 === 0 ? 1 : 0)
+    }
+    const transform = [
+        0, 1, 0, 0,
+        -1, 0, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ]
+    const inverse = [
+        0, -1, 0, 0,
+        1, 0, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1,
+    ]
+    const source = Array.from({ length: 16 }, (_, index) => get(index))
+    const multiply = (a: number[], b: number[]): number[] => {
+        const out = new Array(16).fill(0)
+        for (let col = 0; col < 4; col += 1) {
+            for (let row = 0; row < 4; row += 1) {
+                out[col * 4 + row] =
+                    a[0 * 4 + row] * b[col * 4 + 0]
+                    + a[1 * 4 + row] * b[col * 4 + 1]
+                    + a[2 * 4 + row] * b[col * 4 + 2]
+                    + a[3 * 4 + row] * b[col * 4 + 3]
+            }
+        }
+        return out
+    }
+    return multiply(multiply(transform, source), inverse) as [number, number, number, number, number, number, number, number, number, number, number, number, number, number, number, number]
+}
+
 export const transformJumpxScale = (value: [number, number, number] | undefined): [number, number, number] => {
     const x = Number(value?.[0] ?? 1)
     const y = Number(value?.[1] ?? 1)

@@ -89,6 +89,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     const initialNodeRef = React.useRef<ParticleEmitter2Node | null>(null);
     const isCommittingRef = React.useRef(false);
     const didRealtimePreviewRef = React.useRef(false);
+    const didUserEditRef = React.useRef(false);
     const suppressAutoPreviewRef = React.useRef(false);
     const commitOnUnmountRef = React.useRef<(() => boolean) | null>(null);
     const clearPreviewOnUnmountRef = React.useRef<(() => void) | null>(null);
@@ -106,6 +107,30 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
     const [presetModalOpen, setPresetModalOpen] = useState(false);
     const [presetName, setPresetName] = useState('');
     const [isSavingPreset, setIsSavingPreset] = useState(false);
+
+    const normalizeForEquality = (value: unknown): unknown => {
+        if (ArrayBuffer.isView(value)) {
+            return Array.from(value as unknown as ArrayLike<unknown>).map(normalizeForEquality);
+        }
+        if (Array.isArray(value)) {
+            return value.map(normalizeForEquality);
+        }
+        if (value && typeof value === 'object') {
+            return Object.fromEntries(
+                Object.entries(value as Record<string, unknown>)
+                    .filter(([, entry]) => typeof entry !== 'undefined')
+                    .sort(([left], [right]) => left.localeCompare(right))
+                    .map(([key, entry]) => [key, normalizeForEquality(entry)])
+            );
+        }
+        if (typeof value === 'number' && Number.isFinite(value)) {
+            return Math.abs(value) < 1e-8 ? 0 : Number(value.toFixed(8));
+        }
+        return value;
+    };
+
+    const nodesAreEquivalent = (left: ParticleEmitter2Node, right: ParticleEmitter2Node): boolean =>
+        JSON.stringify(normalizeForEquality(left)) === JSON.stringify(normalizeForEquality(right));
 
     const getCurrentSegmentColors = useCallback((): [[number, number, number], [number, number, number], [number, number, number]] => {
         const values = form.getFieldsValue(['Seg1Color', 'Seg2Color', 'Seg3Color']);
@@ -145,6 +170,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             initialNodeRef.current = null;
             isCommittingRef.current = false;
             didRealtimePreviewRef.current = false;
+            didUserEditRef.current = false;
             suppressAutoPreviewRef.current = false;
             formHydratedForNodeIdRef.current = null;
             hueBaseColorsRef.current = null;
@@ -171,6 +197,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
         formHydratedForNodeIdRef.current = nodeId;
         suppressAutoPreviewRef.current = true;
+        didUserEditRef.current = false;
 
         const currentNode = sourceNode;
         if (!initialNodeRef.current && currentNode) {
@@ -321,6 +348,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             ...sourceNode,
             TextureID: safeTextureId,
         };
+        didUserEditRef.current = true;
         form.setFieldValue('TextureID', safeTextureId);
         if (isStandalone) {
             applyCommittedNode(previewNode);
@@ -470,13 +498,18 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         const updatedNode = buildUpdatedNodeFromValues(values);
         if (!updatedNode) return;
         const nextNode: ParticleEmitter2Node = overrides ? { ...updatedNode, ...overrides } : updatedNode;
+        const sourceNode = getCurrentSourceNode();
+        if (sourceNode && nodesAreEquivalent(sourceNode, nextNode)) {
+            return;
+        }
         applyCommittedNode(nextNode);
-    }, [applyCommittedNode, buildUpdatedNodeFromValues, form, isStandalone, nodeId]);
+    }, [applyCommittedNode, buildUpdatedNodeFromValues, form, getCurrentSourceNode, isStandalone, nodeId]);
 
     useEffect(() => {
         if (!isStandalone || nodeId === null) return;
         if (suppressAutoPreviewRef.current) return;
         if (formHydratedForNodeIdRef.current !== nodeId) return;
+        if (!didUserEditRef.current && !didRealtimePreviewRef.current) return;
 
         if (standaloneDraftCommitTimerRef.current !== null) {
             clearTimeout(standaloneDraftCommitTimerRef.current);
@@ -537,6 +570,14 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
         if (!updatedNode) return false;
 
         const oldNode = initialNodeRef.current || sourceNode;
+        if (!didUserEditRef.current) {
+            clearPreviewNode();
+            return false;
+        }
+        if (nodesAreEquivalent(oldNode, updatedNode)) {
+            clearPreviewNode();
+            return false;
+        }
         isCommittingRef.current = true;
         applyCommittedNode(updatedNode, {
             name: `Edit Particle Emitter`,
@@ -544,7 +585,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             redoNode: updatedNode,
         });
         return true;
-    }, [applyCommittedNode, buildUpdatedNodeFromValues, form, getCurrentSourceNode, nodeId]);
+    }, [applyCommittedNode, buildUpdatedNodeFromValues, clearPreviewNode, form, getCurrentSourceNode, nodeId]);
 
     useEffect(() => {
         commitOnUnmountRef.current = commitCurrentValues;
@@ -578,7 +619,11 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
 
     const handleCancel = () => {
         setPresetModalOpen(false);
-        commitCurrentValues();
+        if (didUserEditRef.current) {
+            commitCurrentValues();
+        } else {
+            clearPreviewNode();
+        }
         onClose();
     };
 
@@ -890,6 +935,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
                     if (suppressAutoPreviewRef.current) {
                         return;
                     }
+                    didUserEditRef.current = true;
                     const changedKeys = Object.keys(changedValues);
                     const hasDeferredChange = changedKeys.some((key) => DEFERRED_PREVIEW_FIELD_NAMES.has(key));
                     if (hasDeferredChange) {

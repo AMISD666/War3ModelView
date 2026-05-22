@@ -73,6 +73,8 @@ scripts/*
 !scripts/check-retarget-mode-renderer-cache.mjs
 !scripts/check-keyframe-transform-tangents.mjs
 !scripts/check-jumpx-pe2-width-length.mjs
+!scripts/check-jumpx-tx268-fixture.mjs
+!scripts/check-jumpx-mesh-bind-matrix.mjs
 local-test-scripts/
 activation/
 

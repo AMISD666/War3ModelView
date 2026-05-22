@@ -8,6 +8,19 @@ pub(super) fn axis_angle_to_quat(x: f32, y: f32, z: f32, angle: f32) -> [f32; 4]
     [x * scale, y * scale, z * scale, half.cos()]
 }
 
+pub(super) fn invert_quat(value: [f32; 4]) -> [f32; 4] {
+    let len_sq = value[0] * value[0] + value[1] * value[1] + value[2] * value[2] + value[3] * value[3];
+    if len_sq <= 1e-8 {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
+    [
+        -value[0] / len_sq,
+        -value[1] / len_sq,
+        -value[2] / len_sq,
+        value[3] / len_sq,
+    ]
+}
+
 pub(super) fn uncompress_bbox(packed: u32, min: [f32; 3], max: [f32; 3]) -> [f32; 3] {
     let mut value = packed;
     let mut out = [0.0; 3];

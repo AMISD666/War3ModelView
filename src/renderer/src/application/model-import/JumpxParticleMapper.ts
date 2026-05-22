@@ -37,6 +37,7 @@ const RENDER_MODULATE = 0x80000
 const RENDER_MODULATE2X = 0x100000
 
 const PE2_NODE_TYPE = 0x1000
+const DONT_INHERIT_SCALING = 0x4
 const PE2_UNSHADED = 0x8000
 const PE2_SORT_PRIMS_FAR_Z = 0x10000
 const PE2_LINE_EMITTER = 0x20000
@@ -109,7 +110,7 @@ const mapVariation = (value: number | undefined): number => {
 }
 
 const mapParticleFlags = (particleFlags: number): number => {
-    let flags = PE2_NODE_TYPE
+    let flags = PE2_NODE_TYPE | DONT_INHERIT_SCALING
     if ((particleFlags & PARTICLE_LINE_EMITTER) !== 0) flags |= PE2_LINE_EMITTER
     if ((particleFlags & JUMPX_MODEL_SPACE) !== 0) flags |= PE2_MODEL_SPACE
     if ((particleFlags & JUMPX_XY_QUAD) !== 0) flags |= PE2_XY_QUAD
@@ -266,16 +267,6 @@ const particleEmitterRotation = (particle: JumpxParticleDto): [number, number, n
     return basisRotation(localX, localY, normal)
 }
 
-const buildStaticVec3Track = (frame: number, vector: [number, number, number]): War3Vec3Track => ({
-    LineType: 0,
-    InterpolationType: 0,
-    GlobalSeqId: null,
-    Keys: [
-        { Frame: 0, Vector: new Float32Array([0, 0, 0]) },
-        { Frame: frame, Vector: new Float32Array(vector) },
-    ],
-})
-
 const buildStaticQuatTrack = (frame: number, vector: [number, number, number, number]): War3QuatTrack => ({
     LineType: 0,
     InterpolationType: 0,
@@ -378,8 +369,9 @@ export const mapJumpxParticlesToParticleEmitter2 = (
     const particleFlags = particle.particleFlags
     const frameFlags = particle.partFlags
     const blendMode = particle.blendMode
-    const head = (frameFlags & (PARTICLE_HEAD | PARTICLE_BOTH)) !== 0
     const tail = (frameFlags & (PARTICLE_TAIL | PARTICLE_BOTH)) !== 0
+    // War3 PE2 must keep Head enabled; Tail-only particles are invisible in-game.
+    const head = true
     const flags = mapParticleFlags(particleFlags)
     const visibility = mapScalarTrack(particle.visibilityKeys, (value) => value > 0 ? 1 : 0)
     const emissionRate = mapScalarTrack(particle.emissionRateKeys, (value) => value)
@@ -417,7 +409,7 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         DecayUVAnim: particleHeadDecayUVAnim(particle),
         TailUVAnim: [0, 0, 0],
         TailDecayUVAnim: [0, 0, 0],
-        TailLength: 0,
+        TailLength: finite(particle.tailLength, 0),
         Squirt: (particleFlags & PARTICLE_SQUIRT) !== 0,
         Unshaded: (flags & PE2_UNSHADED) !== 0,
         SortPrimsFarZ: (flags & PE2_SORT_PRIMS_FAR_Z) !== 0,
@@ -425,11 +417,10 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         Unfogged: (flags & PE2_UNFOGGED) !== 0,
         ModelSpace: (flags & PE2_MODEL_SPACE) !== 0,
         XYQuad: (flags & PE2_XY_QUAD) !== 0,
-        Head: head || !tail,
+        Head: head,
         Tail: tail,
-        FrameFlags: (head || !tail ? 1 : 0) | (tail ? 2 : 0),
+        FrameFlags: (head ? 1 : 0) | (tail ? 2 : 0),
         Visibility: visibility,
-        Translation: buildStaticVec3Track(firstAnimationFrame, [0, 0, 0]),
         Rotation: particleRotationTrack(particle, firstAnimationFrame),
     }
 })

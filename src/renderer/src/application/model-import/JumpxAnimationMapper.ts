@@ -1,5 +1,5 @@
 import { quat } from 'gl-matrix'
-import type { JumpxActionDto, JumpxBoneDto, JumpxScalarKeyDto, JumpxStaticSceneResult } from '../../types/jumpxImport'
+import type { JumpxActionDto, JumpxBoneDto, JumpxGeometryDto, JumpxScalarKeyDto, JumpxStaticSceneResult } from '../../types/jumpxImport'
 import type { ModelData, Sequence } from '../../types/model'
 import type { ModelNode } from '../../types/node'
 import type { JumpxNodeMapping } from './JumpxNodeMapper'
@@ -15,6 +15,10 @@ type War3Track = {
 const DEFAULT_JUMPX_FPS = 30
 const DEFAULT_JUMPX_START_FRAME = 320
 const JUMPX_TRACK_LINE_TYPE_DONT_INTERP = 0
+const JUMPX_TRACK_LINE_TYPE_LINEAR = 1
+const SCALE_EPSILON = 1e-5
+const FLAT_GEOMETRY_EPSILON = 1e-3
+const CIRCULAR_PLANE_RATIO_LIMIT = 1.05
 
 const frameToMs = (frame: number, framesPerSecond: number): number =>
     Math.round((Math.max(0, frame) / Math.max(1, framesPerSecond)) * 1000)
@@ -123,15 +127,99 @@ const mapRotationTrack = (
     if (keys.length === 0) {
         return null
     }
-    const baseInverse = quat.invert(quat.create(), normalizedQuat(keys[0].value))
+    let previousRotation: quat | null = null
     return makeTrack(keys.map((key) => {
-        const relative = quat.multiply(quat.create(), baseInverse, normalizedQuat(key.value))
-        quat.normalize(relative, relative)
+        const rotation = normalizedQuat(key.value)
+        if (previousRotation && quat.dot(previousRotation, rotation) < 0) {
+            quat.scale(rotation, rotation, -1)
+        }
+        previousRotation = quat.clone(rotation)
         return {
             frame: jumpxAnimationKeyFrame(key, framesPerSecond, sourceStartFrame),
-            vector: new Float32Array([relative[0], relative[1], relative[2], relative[3]]),
+            vector: new Float32Array([rotation[0], rotation[1], rotation[2], rotation[3]]),
         }
-    }))
+    }), JUMPX_TRACK_LINE_TYPE_LINEAR)
+}
+
+const close = (a: number, b: number): boolean => Math.abs(a - b) <= SCALE_EPSILON
+
+const transformJumpxAxis = (sourceAxis: number): number =>
+    sourceAxis === 0 ? 1 : sourceAxis === 1 ? 0 : 2
+
+const circularPlaneNormalAxis = (geometry: JumpxGeometryDto): number | null => {
+    const size = [
+        Math.abs(geometry.maximumExtent[0] - geometry.minimumExtent[0]),
+        Math.abs(geometry.maximumExtent[1] - geometry.minimumExtent[1]),
+        Math.abs(geometry.maximumExtent[2] - geometry.minimumExtent[2]),
+    ]
+    let flatAxis = 0
+    for (let axis = 1; axis < 3; axis += 1) {
+        if (size[axis] < size[flatAxis]) {
+            flatAxis = axis
+        }
+    }
+    const planeAxes = [0, 1, 2].filter((axis) => axis !== flatAxis)
+    const planeMax = Math.max(size[planeAxes[0]], size[planeAxes[1]])
+    const planeMin = Math.min(size[planeAxes[0]], size[planeAxes[1]])
+    if (planeMax <= FLAT_GEOMETRY_EPSILON) {
+        return null
+    }
+    if (size[flatAxis] > Math.max(FLAT_GEOMETRY_EPSILON, planeMax * 0.01)) {
+        return null
+    }
+    if (planeMax / Math.max(FLAT_GEOMETRY_EPSILON, planeMin) > CIRCULAR_PLANE_RATIO_LIMIT) {
+        return null
+    }
+    return transformJumpxAxis(flatAxis)
+}
+
+const buildCircularScaleNormalAxisByBone = (geometries: JumpxGeometryDto[]): Map<number, number> => {
+    const axisVotesByBone = new Map<number, Map<number, number>>()
+    for (const geometry of geometries) {
+        const axis = circularPlaneNormalAxis(geometry)
+        if (axis === null || geometry.ancestorBoneId < 0) {
+            continue
+        }
+        let votes = axisVotesByBone.get(geometry.ancestorBoneId)
+        if (!votes) {
+            votes = new Map<number, number>()
+            axisVotesByBone.set(geometry.ancestorBoneId, votes)
+        }
+        votes.set(axis, (votes.get(axis) ?? 0) + 1)
+    }
+    const result = new Map<number, number>()
+    for (const [boneId, votes] of axisVotesByBone) {
+        const [axis] = Array.from(votes).sort((a, b) => b[1] - a[1] || a[0] - b[0])[0]
+        result.set(boneId, axis)
+    }
+    return result
+}
+
+const mapBoneScaleKey = (
+    value: [number, number, number] | undefined,
+    circularNormalAxis: number | undefined,
+): [number, number, number] => {
+    const x = Math.abs(Number(value?.[0] ?? 1))
+    const y = Math.abs(Number(value?.[1] ?? 1))
+    const z = Math.abs(Number(value?.[2] ?? 1))
+    if (circularNormalAxis !== undefined) {
+        if (close(x, y) && !close(y, z)) {
+            const mapped = [x, x, x] as [number, number, number]
+            mapped[circularNormalAxis] = z
+            return mapped
+        }
+        if (close(x, z) && !close(x, y)) {
+            const mapped = [x, x, x] as [number, number, number]
+            mapped[circularNormalAxis] = y
+            return mapped
+        }
+        if (close(y, z) && !close(x, y)) {
+            const mapped = [y, y, y] as [number, number, number]
+            mapped[circularNormalAxis] = x
+            return mapped
+        }
+    }
+    return transformJumpxScale(value)
 }
 
 const mapBoneTracks = (
@@ -139,6 +227,7 @@ const mapBoneTracks = (
     framesPerSecond: number,
     pivot: [number, number, number],
     sourceStartFrame: number,
+    circularScaleNormalAxis: number | undefined,
 ): { translation: War3Track | null; rotation: War3Track | null; scaling: War3Track | null } => {
     return {
         translation: makeTrack(bone.positionKeys.map((key) => {
@@ -153,9 +242,9 @@ const mapBoneTracks = (
             }
         })),
         rotation: mapRotationTrack(bone.rotationKeys, framesPerSecond, sourceStartFrame),
-        scaling: makeTrack(bone.scaleKeys.map((key, index) => ({
+        scaling: makeTrack(bone.scaleKeys.map((key) => ({
             frame: jumpxAnimationKeyFrame(key, framesPerSecond, sourceStartFrame),
-            vector: new Float32Array(index === 0 ? [1, 1, 1] : transformJumpxScale(key.value)),
+            vector: new Float32Array(mapBoneScaleKey(key.value, circularScaleNormalAxis)),
         }))),
     }
 }
@@ -168,6 +257,7 @@ export const applyJumpxAnimationTracks = (
 ): number => {
     const framesPerSecond = options.framesPerSecond ?? DEFAULT_JUMPX_FPS
     const sourceStartFrame = (scene.actions ?? []).length > 0 ? 0 : DEFAULT_JUMPX_START_FRAME
+    const circularScaleNormalAxisByBone = buildCircularScaleNormalAxisByBone(scene.geometries ?? [])
     let mappedKeyCount = 0
 
     for (const bone of scene.bones ?? []) {
@@ -180,11 +270,35 @@ export const applyJumpxAnimationTracks = (
             continue
         }
         const pivot = node.PivotPoint ?? [0, 0, 0]
-        const tracks = mapBoneTracks(bone, framesPerSecond, pivot, sourceStartFrame)
+        const tracks = mapBoneTracks(
+            bone,
+            framesPerSecond,
+            pivot,
+            sourceStartFrame,
+            circularScaleNormalAxisByBone.get(bone.boneIndex),
+        )
         mappedKeyCount += appendTrack(node, 'Translation', tracks.translation)
         mappedKeyCount += appendTrack(node, 'Rotation', tracks.rotation)
         mappedKeyCount += appendTrack(node, 'Scaling', tracks.scaling)
         mappedKeyCount += appendTrack(node, 'Visibility', mapScalarTrack(bone.visibilityKeys, framesPerSecond, sourceStartFrame))
+
+        const meshObjectId = nodeMapping.meshObjectIdByBoneId.get(bone.boneIndex)
+        const meshNode = meshObjectId !== undefined
+            ? nodeMapping.nodes.find((candidate) => candidate.ObjectId === meshObjectId)
+            : undefined
+        if (meshNode) {
+            const meshTracks = mapBoneTracks(
+                bone,
+                framesPerSecond,
+                [0, 0, 0],
+                sourceStartFrame,
+                undefined,
+            )
+            mappedKeyCount += appendTrack(meshNode, 'Translation', meshTracks.translation)
+            mappedKeyCount += appendTrack(meshNode, 'Rotation', meshTracks.rotation)
+            mappedKeyCount += appendTrack(meshNode, 'Scaling', meshTracks.scaling)
+            mappedKeyCount += appendTrack(meshNode, 'Visibility', mapScalarTrack(bone.visibilityKeys, framesPerSecond, sourceStartFrame))
+        }
     }
 
     if ((scene.actions ?? []).length > 0) {

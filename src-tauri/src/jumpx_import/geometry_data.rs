@@ -1,7 +1,7 @@
 use super::binary::{
     decrypt_offset, read_f32_at, read_i8_at, read_u32_at, read_u64_at, read_u8_at,
 };
-use super::math::{axis_angle_to_quat, uncompress_bbox};
+use super::math::{axis_angle_to_quat, invert_quat, uncompress_bbox};
 use super::types::{JumpxQuatKeyDto, JumpxScalarKeyDto, JumpxVec3KeyDto};
 
 pub(super) const EPSILON: f32 = 1e-4;
@@ -239,7 +239,7 @@ pub(super) fn read_quat_keys(
             out.push(JumpxQuatKeyDto {
                 frame,
                 time_ms: Some(sample_time_ms(frame)),
-                value: axis_angle_to_quat(x, y, z, angle),
+                value: invert_quat(axis_angle_to_quat(x, y, z, angle)),
                 raw_flags: 0,
             });
         }
@@ -255,12 +255,12 @@ pub(super) fn read_quat_keys(
         out.push(JumpxQuatKeyDto {
             frame,
             time_ms: Some(sample_time_ms(frame)),
-            value: [
+            value: invert_quat([
                 read_f32_at(data, offset + index * 16)?,
                 read_f32_at(data, offset + index * 16 + 4)?,
                 read_f32_at(data, offset + index * 16 + 8)?,
                 read_f32_at(data, offset + index * 16 + 12)?,
-            ],
+            ]),
             raw_flags: 0,
         });
     }
