@@ -5,10 +5,29 @@ import {
     markRendererSyncStarted,
 } from './RendererSyncDiagnostics'
 import type {
+    MaterialProjectionRendererTarget,
     RendererSyncError,
     RendererSyncResult,
     SceneMetadataRendererSyncInput,
 } from './RendererSyncTypes'
+
+const syncParticleEmitterModelReferences = (
+    renderer: MaterialProjectionRendererTarget,
+    particleEmitters: unknown[],
+): void => {
+    if (renderer.model) {
+        renderer.model.ParticleEmitters2 = particleEmitters
+    }
+    if (renderer.modelInstance?.model) {
+        renderer.modelInstance.model.ParticleEmitters2 = particleEmitters
+    }
+    if (renderer.modelInstance?.rendererData?.model) {
+        renderer.modelInstance.rendererData.model.ParticleEmitters2 = particleEmitters
+    }
+    if (renderer.rendererData?.model) {
+        renderer.rendererData.model.ParticleEmitters2 = particleEmitters
+    }
+}
 
 export const syncSceneMetadata = (
     input: SceneMetadataRendererSyncInput,
@@ -28,16 +47,19 @@ export const syncSceneMetadata = (
 
         const nextEmitters = (input.particleEmitters ?? input.document.ParticleEmitters2 ?? []) as unknown[]
         const currentEmitters = Array.isArray(rendererModel.ParticleEmitters2) ? rendererModel.ParticleEmitters2 as unknown[] : []
+        let syncedParticleEmitters = currentEmitters
+        let particleEmittersChanged = false
         if (currentEmitters.length === nextEmitters.length && input.syncParticleEmittersInPlace) {
             input.syncParticleEmittersInPlace(currentEmitters, nextEmitters)
-            if (rendererModel.ParticleEmitters2 !== currentEmitters) {
-                rendererModel.ParticleEmitters2 = currentEmitters
-            }
-            changed = changed || currentEmitters.length > 0
-        } else if (rendererModel.ParticleEmitters2 !== nextEmitters) {
-            rendererModel.ParticleEmitters2 = nextEmitters
-            changed = true
+            syncedParticleEmitters = currentEmitters
+            particleEmittersChanged = currentEmitters.length > 0
+        } else {
+            syncedParticleEmitters = nextEmitters
+            particleEmittersChanged = rendererModel.ParticleEmitters2 !== nextEmitters
         }
+        syncParticleEmitterModelReferences(input.renderer, syncedParticleEmitters)
+        input.renderer.modelInstance?.particlesController?.syncEmitters?.()
+        changed = changed || particleEmittersChanged
 
         if (input.document.RibbonEmitters !== undefined && rendererModel.RibbonEmitters !== input.document.RibbonEmitters) {
             rendererModel.RibbonEmitters = input.document.RibbonEmitters

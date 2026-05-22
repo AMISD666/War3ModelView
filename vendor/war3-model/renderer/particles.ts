@@ -132,6 +132,7 @@ interface ParticleEmitterWrapper {
     _uvAnimLogged?: boolean; // UV animation debug logging
     _uvLogCounter?: number; // UV animation log counter for periodic logging
     _lifeSignature?: string;
+    _bufferSignature?: string;
 }
 
 const DISCARD_ALPHA_KEY_LEVEL = 0.83;
@@ -152,11 +153,36 @@ function scalarAnimSignature(value: any): string {
     ].join(';');
 }
 
-function particleLifeSignature(props: ParticleEmitter2): string {
+function arrayLikeSignature(value: any): string {
+    if (!value || !(Array.isArray(value) || ArrayBuffer.isView(value))) {
+        return '';
+    }
+    return Array.from(value as ArrayLike<unknown>).join(',');
+}
+
+function particleLifecycleSignature(props: ParticleEmitter2): string {
     return [
         getParticleEmitter2FrameFlags(props),
         props.LifeSpan || 1,
-        scalarAnimSignature((props as any).EmissionRate)
+        scalarAnimSignature((props as any).EmissionRate),
+        scalarAnimSignature((props as any).Speed),
+        scalarAnimSignature((props as any).Variation),
+        scalarAnimSignature((props as any).Latitude),
+        scalarAnimSignature((props as any).Width),
+        scalarAnimSignature((props as any).Length),
+        scalarAnimSignature((props as any).Gravity),
+        arrayLikeSignature((props as any).ParticleScaling)
+    ].join('#');
+}
+
+function particleBufferSignature(props: ParticleEmitter2): string {
+    return [
+        props.Rows ?? '',
+        props.Columns ?? '',
+        arrayLikeSignature((props as any).LifeSpanUVAnim),
+        arrayLikeSignature((props as any).DecayUVAnim),
+        arrayLikeSignature((props as any).TailUVAnim),
+        arrayLikeSignature((props as any).TailDecayUVAnim)
     ].join('#');
 }
 
@@ -421,25 +447,31 @@ export class ParticlesController {
         for (let i = 0; i < this.emitters.length && i < model.ParticleEmitters2.length; ++i) {
             const newProps = model.ParticleEmitters2[i];
             const oldProps = this.emitters[i].props;
-            const oldLifeSignature = this.emitters[i]._lifeSignature ||
-                particleLifeSignature(oldProps);
-            const newLifeSignature = particleLifeSignature(newProps);
+            const oldLifecycleSignature = this.emitters[i]._lifeSignature ||
+                particleLifecycleSignature(oldProps);
+            const newLifecycleSignature = particleLifecycleSignature(newProps);
+            const oldBufferSignature = this.emitters[i]._bufferSignature ||
+                particleBufferSignature(oldProps);
+            const newBufferSignature = particleBufferSignature(newProps);
 
             // Always update props reference to ensure latest data is used
             this.emitters[i].props = newProps;
 
             // Check if key properties changed OR if this is the first sync after creation
             const needsInitialSync = this.emitters[i]._needsInitialSync === true;
-            const propsChanged = needsInitialSync || oldLifeSignature !== newLifeSignature;
+            const lifecycleChanged = needsInitialSync || oldLifecycleSignature !== newLifecycleSignature;
+            const bufferChanged = oldBufferSignature !== newBufferSignature;
 
-            if (propsChanged) {
+            if (lifecycleChanged || bufferChanged) {
                 // Also update type in case FrameFlags changed
                 const nextFrameFlags = getParticleEmitter2FrameFlags(newProps);
                 const frameFlagsChanged = this.emitters[i].type !== nextFrameFlags;
                 this.emitters[i].type = nextFrameFlags;
-                if (frameFlagsChanged) {
+                if (frameFlagsChanged || bufferChanged) {
                     this.resetEmitterFrameBuffers(this.emitters[i]);
                 }
+            }
+            if (lifecycleChanged) {
                 // Recalculate base capacity
                 const emissionRate = newProps.EmissionRate;
                 const lifeSpan = newProps.LifeSpan || 1;
@@ -458,7 +490,8 @@ export class ParticlesController {
                 this.emitters[i]._velocityLogged = false;
                 this.emitters[i]._needsInitialSync = false; // Clear initial sync flag
             }
-            this.emitters[i]._lifeSignature = newLifeSignature;
+            this.emitters[i]._lifeSignature = newLifecycleSignature;
+            this.emitters[i]._bufferSignature = newBufferSignature;
         }
 
         // Check for new emitters that aren't yet tracked
@@ -496,7 +529,8 @@ export class ParticlesController {
                 indexBuffer: null,
                 indexGPUBuffer: null,
                 fsUniformsBuffer: null,
-                _lifeSignature: particleLifeSignature(particleEmitter)
+                _lifeSignature: particleLifecycleSignature(particleEmitter),
+                _bufferSignature: particleBufferSignature(particleEmitter)
             };
 
             // Calculate base capacity for buffer sizing
@@ -904,7 +938,9 @@ export class ParticlesController {
             this.setGeneralBuffers(emitter);
 
             if (emitter.type & ParticleEmitter2FramesFlags.Tail) {
+                this.gl.disable(this.gl.CULL_FACE);
                 this.renderEmitterType(emitter, ParticleEmitter2FramesFlags.Tail);
+                this.gl.enable(this.gl.CULL_FACE);
             }
             if (emitter.type & ParticleEmitter2FramesFlags.Head) {
                 this.renderEmitterType(emitter, ParticleEmitter2FramesFlags.Head);

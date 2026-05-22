@@ -4,6 +4,7 @@ import type { ModelData, Sequence } from '../../types/model'
 import type { ModelNode } from '../../types/node'
 import type { JumpxNodeMapping } from './JumpxNodeMapper'
 import { transformJumpxQuat, transformJumpxScale, transformJumpxVec3 } from './JumpxCoordinateTransform'
+import { applyParticleLifecycleEmissionTracks } from './JumpxParticleLifecycleMapper'
 
 type War3Track = {
     LineType: number
@@ -292,6 +293,7 @@ export const applyJumpxAnimationTracks = (
     const framesPerSecond = options.framesPerSecond ?? DEFAULT_JUMPX_FPS
     const sourceStartFrame = (scene.actions ?? []).length > 0 ? 0 : DEFAULT_JUMPX_START_FRAME
     const circularScaleNormalAxisByBone = buildCircularScaleNormalAxisByBone(scene.geometries ?? [])
+    const particleParentBoneIds = new Set((scene.particles ?? []).map((particle) => particle.parentBoneId))
     let mappedKeyCount = 0
 
     for (const bone of scene.bones ?? []) {
@@ -311,9 +313,10 @@ export const applyJumpxAnimationTracks = (
             sourceStartFrame,
             circularScaleNormalAxisByBone.get(bone.boneIndex),
         )
-        mappedKeyCount += appendTrack(node, 'Translation', tracks.translation)
-        mappedKeyCount += appendTrack(node, 'Rotation', tracks.rotation)
-        mappedKeyCount += appendTrack(node, 'Scaling', tracks.scaling)
+        const needsFrameZeroPose = particleParentBoneIds.has(bone.boneIndex)
+        mappedKeyCount += appendTrack(node, 'Translation', needsFrameZeroPose ? prependStaticKey(tracks.translation) : tracks.translation)
+        mappedKeyCount += appendTrack(node, 'Rotation', needsFrameZeroPose ? prependStaticKey(tracks.rotation) : tracks.rotation)
+        mappedKeyCount += appendTrack(node, 'Scaling', needsFrameZeroPose ? prependStaticKey(tracks.scaling) : tracks.scaling)
         mappedKeyCount += appendTrack(node, 'Visibility', mapScalarTrack(bone.visibilityKeys, framesPerSecond, sourceStartFrame))
 
         const meshObjectId = nodeMapping.meshObjectIdByBoneId.get(bone.boneIndex)
@@ -355,6 +358,8 @@ export const applyJumpxAnimationTracks = (
             BoundsRadius: modelData.Model.BoundsRadius,
         }]
     }
+
+    mappedKeyCount += applyParticleLifecycleEmissionTracks(scene, modelData, framesPerSecond, sourceStartFrame)
 
     return mappedKeyCount
 }

@@ -21,6 +21,7 @@ import {
     normalizeTextures,
 } from './saveDataSections'
 import { normalizeMaterialForSave } from './normalizeMaterialLayersForSave'
+import { normalizeParticleEmitter2RenderFields } from '../model-normalization/ParticleEmitter2RenderNormalization'
 
 const UNBOUND_BONE_SENTINEL = 65535
 
@@ -499,16 +500,7 @@ export function prepareModelDataForSave(modelData: any): any {
 
             emitter.Flags = flags;
 
-            // Reconstruct FrameFlags from Head/Tail booleans
-            let frameFlags = 0;
-            if (emitter.Head === true) frameFlags |= 1;
-            if (emitter.Tail === true) frameFlags |= 2;
-            if (emitter.Head === undefined && emitter.Tail === undefined) {
-                frameFlags = emitter.FrameFlags || 0;
-            }
-            // Warcraft III PE2 particles require the Head bit; Tail-only emitters do not render reliably.
-            frameFlags |= 1;
-            emitter.FrameFlags = frameFlags;
+            normalizeParticleEmitter2RenderFields(emitter);
 
             // Fix Squirt
             if (emitter.Squirt !== undefined) {
@@ -599,6 +591,7 @@ export function prepareModelDataForSave(modelData: any): any {
             }
 
             // Fix UV animations - must be Uint32Array(3)
+            normalizeParticleEmitter2RenderFields(emitter);
             const uvAnims = ['LifeSpanUVAnim', 'DecayUVAnim', 'TailUVAnim', 'TailDecayUVAnim'];
             uvAnims.forEach(animName => {
                 if (emitter[animName]) {

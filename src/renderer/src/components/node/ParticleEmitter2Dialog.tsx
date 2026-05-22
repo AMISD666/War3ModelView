@@ -15,6 +15,7 @@ import { useNodeEditorPreview } from '../../hooks/useNodeEditorPreview';
 import { useWindowEvent } from '../../hooks/useWindowEvent';
 import { NODE_EDITOR_COMMANDS } from '../../types/nodeEditorRpc';
 import { nodeEditorCommandHandler } from '../../application/commands';
+import { normalizeParticleEmitter2RenderFields } from '../../application/model-normalization/ParticleEmitter2RenderNormalization';
 import { KEYFRAME_SAVE_EVENT, type KeyframeSavePayload } from '../../application/window-bridge';
 import { DEFERRED_PREVIEW_FIELD_NAMES, PROP_TO_ANIM_KEY } from './particle-emitter2/constants';
 import { DeferredCommitContext } from './particle-emitter2/DeferredInputNumber';
@@ -472,6 +473,7 @@ const ParticleEmitter2Dialog: React.FC<ParticleEmitter2DialogProps> = ({
             }
         });
 
+        normalizeParticleEmitter2RenderFields(updatedNode);
         return updatedNode;
     }, [getCurrentSourceNode]);
 

@@ -23,8 +23,7 @@ export interface RendererSyncRevisionInput {
     previewRevision: number
 }
 
-export interface MaterialProjectionRendererTarget {
-    model?: {
+export interface RendererModelProjection {
         Textures?: unknown[]
         Materials?: unknown[]
         Geosets?: unknown[]
@@ -46,18 +45,30 @@ export interface MaterialProjectionRendererTarget {
         MinimumExtent?: unknown
         MaximumExtent?: unknown
         Extents?: unknown
-    } | null
+}
+
+export interface MaterialProjectionRendererTarget {
+    model?: RendererModelProjection | null
     modelInstance?: {
+        model?: RendererModelProjection | null
+        rendererData?: {
+            model?: RendererModelProjection | null
+        } | null
         syncNodes?: () => void
         syncMaterials?: () => void
         syncGeosetAnims?: () => void
         syncGlobalSequences?: () => void
+        particlesController?: {
+            syncEmitters?: () => void
+            resetEmitters?: () => void
+        } | null
         ribbonsController?: {
             syncEmitters?: () => void
             resetEmitters?: () => void
         } | null
     } | null
     rendererData?: {
+        model?: RendererModelProjection | null
         nodes?: Array<{ node?: Record<string, unknown> | null } | null>
         materialLayerTextureID?: unknown[][]
         materialLayerNormalTextureID?: unknown[][]

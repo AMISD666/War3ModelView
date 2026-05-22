@@ -1,3 +1,5 @@
+import { normalizeParticleEmitter2RenderFields } from '../../application/model-normalization/ParticleEmitter2RenderNormalization'
+
 /**
  * particleValidator - Utility functions for validating and fixing particle emitter data
  * Fixes production-only rendering issues caused by invalid/missing properties
@@ -41,6 +43,8 @@ const PE2_ANIM_VECTOR_FIELDS = [
  * Ensures all required properties are present and properly formatted
  */
 export function validateParticleEmitter2(emitter: any, idx: number, textureCount: number): void {
+    normalizeParticleEmitter2RenderFields(emitter)
+
     // Fix 1: TextureID - keep explicit None, but clamp stale positive ids.
     if (emitter.TextureID === undefined || emitter.TextureID === null || emitter.TextureID < 0) {
         emitter.TextureID = -1
@@ -63,23 +67,7 @@ export function validateParticleEmitter2(emitter: any, idx: number, textureCount
 
     emitter.Flags = flags
 
-    // Fix 3: Reconstruct FrameFlags from Head/Tail booleans. Warcraft III PE2
-    // emitters must keep Head enabled or the particle will not render.
-    let frameFlags = typeof emitter.FrameFlags === 'number' ? (emitter.FrameFlags & 0x3) : 0
-    if (emitter.Head === true) {
-        frameFlags |= 1
-    } else if (emitter.Head === false) {
-        frameFlags &= ~1
-    }
-    if (emitter.Tail === true) {
-        frameFlags |= 2
-    } else if (emitter.Tail === false) {
-        frameFlags &= ~2
-    }
-    frameFlags |= 1
-    emitter.FrameFlags = frameFlags
-    emitter.Head = true
-    emitter.Tail = (frameFlags & 2) !== 0
+    normalizeParticleEmitter2RenderFields(emitter)
 
     PE2_ANIM_VECTOR_FIELDS.forEach((f) => normalizeAnimVectorKeysInPlace(emitter[f]))
 

@@ -38,6 +38,7 @@ const RENDER_MODULATE2X = 0x100000
 
 const PE2_NODE_TYPE = 0x1000
 const DONT_INHERIT_SCALING = 0x4
+const DONT_INHERIT_ROTATION = 0x2
 const PE2_UNSHADED = 0x8000
 const PE2_SORT_PRIMS_FAR_Z = 0x10000
 const PE2_LINE_EMITTER = 0x20000
@@ -233,8 +234,10 @@ const particleVector = (
     particle: JumpxParticleDto,
     value: [number, number, number],
     bonesByIndex: Map<number, JumpxBoneDto>,
-): [number, number, number] =>
-    transformJumpxVec3(transformSourceVector(sourceParentInverseBindMatrix(particle, bonesByIndex), value))
+): [number, number, number] => {
+    void bonesByIndex
+    return transformJumpxVec3(value)
+}
 
 const particlePivotPoint = (
     particle: JumpxParticleDto,
@@ -377,7 +380,8 @@ const particleHeadLifeSpanUVAnim = (particle: JumpxParticleDto): [number, number
     }
 
     const split = Math.max(1, Math.floor(cells / 2))
-    return [0, split - 1, 1]
+    const repeat = Math.max(1, Math.floor(finite(particle.numLoop, 1)))
+    return [0, split - 1, repeat]
 }
 
 const particleHeadDecayUVAnim = (particle: JumpxParticleDto): [number, number, number] => {
@@ -387,7 +391,8 @@ const particleHeadDecayUVAnim = (particle: JumpxParticleDto): [number, number, n
     }
 
     const split = Math.max(1, Math.floor(cells / 2))
-    return [split, cells, 1]
+    const repeat = Math.max(1, Math.floor(finite(particle.numLoop, 1)))
+    return [split, cells - 1, repeat]
 }
 
 const hasLifeRandomRange = (value: JumpxParticleDto['lifeRandom']): boolean =>
@@ -437,7 +442,8 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         ObjectId: firstObjectId + index,
         Parent: mapParent(particle, nodeMapping),
         PivotPoint: particlePivotPoint(particle, bonesByIndex),
-        Flags: flags,
+        Flags: flags | DONT_INHERIT_ROTATION,
+        DontInherit: { Rotation: true, Scaling: true },
         EmissionRate: emissionRate ?? finite(particle.emissionRate, 0),
         Speed: finite(particle.speed, 0),
         Variation: mapVariation(particle.speedVariation),

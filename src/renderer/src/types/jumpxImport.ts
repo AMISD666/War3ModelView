@@ -176,6 +176,10 @@ export interface JumpxParticleDto {
     yAxis: [number, number, number]
     rotVec: [number, number, number]
     rotVel: [number, number, number]
+    uvAnimFps?: number
+    useTimeBasedCell?: boolean
+    matchLife?: boolean
+    numLoop?: number
     lifeSpanHeadUVAnim: [number, number, number]
     decayHeadUVAnim: [number, number, number]
     lifeSpanTailUVAnim: [number, number, number]

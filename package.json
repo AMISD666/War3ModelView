@@ -21,6 +21,8 @@
     "check:geoset-animation-selection-preserve": "node scripts/check-geoset-animation-selection-preserve.mjs",
     "check:node-dynamic-track-removal": "node scripts/check-node-dynamic-track-removal.mjs",
     "check:node-preview-object-id-zero": "node scripts/check-node-preview-object-id-zero.mjs",
+    "check:pe2-tail-render-normalization": "node scripts/check-pe2-tail-render-normalization.mjs",
+    "check:pe2-live-renderer-sync": "node scripts/check-pe2-live-renderer-sync.mjs",
     "check:keyframe-gizmo-mousedown-hit": "node scripts/check-keyframe-gizmo-mousedown-hit.mjs",
     "check:startup-diagnostics": "node scripts/check-startup-diagnostics.mjs",
     "check:save-export-no-texture-copy": "node scripts/check-save-export-no-texture-copy.mjs",

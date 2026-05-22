@@ -35,6 +35,7 @@ import {
     buildClipboardGlobalSequencePayload,
     remapGlobalSequenceReferencesInPlace,
 } from '../application/model-clipboard/globalSequenceClipboard';
+import { normalizeParticleEmitter2RenderFields } from '../application/model-normalization/ParticleEmitter2RenderNormalization';
 const MAX_CACHED_RENDERERS = 5;
 
 const normalizeModelIdentityPath = (path: unknown): string => {
@@ -1016,11 +1017,12 @@ export function updateModelDataWithNodes(
                 formattedNode.ParticleScaling = new Float32Array(n.ParticleScaling);
             }
 
-            // UV Animations
-            if (n.LifeSpanUVAnim) formattedNode.LifeSpanUVAnim = new Uint32Array(n.LifeSpanUVAnim);
-            if (n.DecayUVAnim) formattedNode.DecayUVAnim = new Uint32Array(n.DecayUVAnim);
-            if (n.TailUVAnim) formattedNode.TailUVAnim = new Uint32Array(n.TailUVAnim);
-            if (n.TailDecayUVAnim) formattedNode.TailDecayUVAnim = new Uint32Array(n.TailDecayUVAnim);
+            normalizeParticleEmitter2RenderFields(formattedNode);
+
+            formattedNode.LifeSpanUVAnim = new Uint32Array(formattedNode.LifeSpanUVAnim);
+            formattedNode.DecayUVAnim = new Uint32Array(formattedNode.DecayUVAnim);
+            formattedNode.TailUVAnim = new Uint32Array(formattedNode.TailUVAnim);
+            formattedNode.TailDecayUVAnim = new Uint32Array(formattedNode.TailDecayUVAnim);
 
             return { ...formattedNode, PivotPoint: pivotPoint };
         }

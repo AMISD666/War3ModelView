@@ -1,6 +1,6 @@
 use crate::jumpx_import::binary::{
     checked_table_offset, decrypt_offset, read_f32_at, read_fixed_string, read_i32_at,
-    read_i32x3_at, read_u32_at, read_u32x3_at,
+    read_i32x3_at, read_u32_at, read_u32x3_at, read_u8_at,
 };
 use crate::jumpx_import::container::JumpxDirectory;
 use crate::jumpx_import::geometry_data::{DEFAULT_SAMPLE_FPS, DEFAULT_SAMPLE_START_FRAME};
@@ -61,6 +61,7 @@ pub(in crate::jumpx_import) fn parse_particles(
             read_f32_at(head, offset + 216)?,
             read_f32_at(head, offset + 220)?,
         ];
+        let uv_anim_fps = read_u32_at(head, offset + 224)?;
         let life_span_head_uv_anim = read_u32x3_at(head, offset + 228)?;
         let decay_head_uv_anim = read_u32x3_at(head, offset + 240)?;
         let life_span_tail_uv_anim = read_u32x3_at(head, offset + 252)?;
@@ -92,6 +93,9 @@ pub(in crate::jumpx_import) fn parse_particles(
             read_f32_at(head, offset + 336)?,
             read_f32_at(head, offset + 340)?,
         ];
+        let use_time_based_cell = read_u8_at(head, offset + 500)? != 0;
+        let match_life = read_u8_at(head, offset + 508)? != 0;
+        let num_loop = read_i32_at(head, offset + 512)?;
         let enable_life_random_offset = offset + 0x418;
         let life_random = if version >= 8 && read_u32_at(head, enable_life_random_offset)? != 0 {
             Some([
@@ -166,6 +170,10 @@ pub(in crate::jumpx_import) fn parse_particles(
             y_axis,
             rot_vec,
             rot_vel,
+            uv_anim_fps,
+            use_time_based_cell,
+            match_life,
+            num_loop,
             life_span_head_uv_anim,
             decay_head_uv_anim,
             life_span_tail_uv_anim,

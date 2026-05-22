@@ -45,12 +45,37 @@ assert(
     'PE2 tail length must use the full world velocity vector scaled by TailLength',
 )
 assert(
+    source.includes('function particleLifecycleSignature') &&
+    source.includes('function particleBufferSignature'),
+    'PE2 sync must separate lifecycle changes from draw/buffer-only changes',
+)
+const lifecycleSignatureBody = source.match(/function particleLifecycleSignature[\s\S]*?\n}\n\nfunction particleBufferSignature/)?.[0] ?? ''
+assert(
+    !lifecycleSignatureBody.includes('props.TailLength'),
+    'PE2 TailLength edits must not clear live particles; TailLength is applied during drawing',
+)
+assert(
+    /function particleBufferSignature[\s\S]{0,500}arrayLikeSignature\(\(props as any\)\.TailUVAnim\)/.test(source) &&
+    /function particleBufferSignature[\s\S]{0,550}arrayLikeSignature\(\(props as any\)\.TailDecayUVAnim\)/.test(source),
+    'PE2 sync must rebuild buffers when tail UV animation fields change',
+)
+assert(
+    source.includes('const lifecycleChanged = needsInitialSync || oldLifecycleSignature !== newLifecycleSignature') &&
+    source.includes('if (lifecycleChanged)') &&
+    source.includes('this.emitters[i].particles = []'),
+    'PE2 sync must only clear existing particles for lifecycle-affecting changes',
+)
+assert(
     /const tailLength = Number\.isFinite\(tailLengthValue\)[\s\S]{0,80}\? tailLengthValue[\s\S]{0,80}: 0/.test(source),
     'PE2 tail geometry must preserve finite negative TailLength values',
 )
 assert(
     source.includes('vec3.scale(tailCross, tailCross, scale)'),
     'PE2 tail width must still use particle segment scale',
+)
+assert(
+    /if \(emitter\.type & ParticleEmitter2FramesFlags\.Tail\) \{[\s\S]{0,120}this\.gl\.disable\(this\.gl\.CULL_FACE\);[\s\S]{0,120}this\.renderEmitterType\(emitter, ParticleEmitter2FramesFlags\.Tail\);[\s\S]{0,120}this\.gl\.enable\(this\.gl\.CULL_FACE\);/.test(source),
+    'PE2 tail rendering must be double-sided so positive and negative TailLength values do not vanish after winding flips',
 )
 assert(
     source.includes('vec3.transformQuat(tailViewDirection, tailViewDirection, this.rendererData.cameraQuat)') &&
