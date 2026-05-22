@@ -1,4 +1,3 @@
-use super::types::FbxAnimationStackDto;
 use regex::Regex;
 use std::collections::HashMap;
 use std::fs;
@@ -11,12 +10,12 @@ struct ActionNameRule {
     target: String,
 }
 
-pub(super) struct ActionNameMapping {
+pub(crate) struct ActionNameMapping {
     rules: Vec<ActionNameRule>,
 }
 
 impl ActionNameMapping {
-    fn from_text(text: &str) -> Option<Self> {
+    pub(crate) fn from_text(text: &str) -> Option<Self> {
         let rules: Vec<ActionNameRule> = text
             .lines()
             .filter_map(parse_rule_line)
@@ -46,7 +45,7 @@ impl ActionNameMapping {
             .map(|rule| rule.target.clone())
     }
 
-    fn map_sequence_names(&self, raw_names: &[String]) -> Vec<Option<String>> {
+    pub(crate) fn map_sequence_names(&self, raw_names: &[String]) -> Vec<Option<String>> {
         let mapped_bases: Vec<Option<String>> =
             raw_names.iter().map(|name| self.map_name(name)).collect();
         let mut base_counts: HashMap<&str, usize> = HashMap::new();
@@ -69,15 +68,6 @@ impl ActionNameMapping {
             })
             .collect()
     }
-
-    pub(super) fn apply_to_animation_stacks(&self, stacks: &mut [FbxAnimationStackDto]) {
-        let raw_names: Vec<String> = stacks.iter().map(|stack| stack.name.clone()).collect();
-        for (stack, mapped_name) in stacks.iter_mut().zip(self.map_sequence_names(&raw_names)) {
-            if let Some(name) = mapped_name {
-                stack.name = name;
-            }
-        }
-    }
 }
 
 fn parse_rule_line(line: &str) -> Option<(&str, &str)> {
@@ -96,7 +86,7 @@ fn parse_rule_line(line: &str) -> Option<(&str, &str)> {
     }
 }
 
-pub(super) fn load_action_name_mapping_from_exe_dir() -> Option<ActionNameMapping> {
+pub(crate) fn load_action_name_mapping_from_exe_dir() -> Option<ActionNameMapping> {
     let exe_path = std::env::current_exe().ok()?;
     let mapping_path = exe_path.parent()?.join(ACTION_NAME_MAPPING_FILE);
     ActionNameMapping::from_file(&mapping_path).ok().flatten()

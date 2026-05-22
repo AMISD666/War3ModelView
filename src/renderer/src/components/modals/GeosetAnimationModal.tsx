@@ -42,12 +42,28 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     const [geosets, setGeosets] = useState<any[]>([])
     const listRef = useRef<HTMLDivElement>(null)
     const lastAnimGeoSigRef = useRef('')
+    const desiredSelectedIndexRef = useRef(-1)
 
     const scrollToItem = (index: number) => {
         if (listRef.current && index >= 0) {
             const itemHeight = 46
             listRef.current.scrollTop = index * itemHeight
         }
+    }
+    const selectAnimIndex = (index: number) => {
+        desiredSelectedIndexRef.current = index
+        setSelectedIndex(index)
+    }
+    const restoreSelectedIndex = (count: number) => {
+        if (count <= 0) {
+            desiredSelectedIndexRef.current = -1
+            setSelectedIndex(-1)
+            return
+        }
+        const desiredIndex = desiredSelectedIndexRef.current
+        const nextIndex = desiredIndex >= 0 ? Math.min(desiredIndex, count - 1) : 0
+        desiredSelectedIndexRef.current = nextIndex
+        setSelectedIndex(nextIndex)
     }
     const cloneAnimVector = (animVector: any, size: number) => {
 
@@ -87,7 +103,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         if (!visible) {
             setLocalAnims([])
             setGeosets([])
-            setSelectedIndex(-1)
+            selectAnimIndex(-1)
             lastAnimGeoSigRef.current = ''
             return
         }
@@ -125,15 +141,11 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             })
             setLocalAnims(clonedAnims)
             setGeosets(currentGeosets || [])
-            if (selectedIndex < 0 && clonedAnims.length > 0) {
-                setSelectedIndex(0)
-            } else if (clonedAnims.length === 0) {
-                setSelectedIndex(-1)
-            }
+            restoreSelectedIndex(clonedAnims.length)
         } else {
             setLocalAnims([])
             setGeosets(Array.isArray(currentGeosets) ? currentGeosets : [])
-            setSelectedIndex(-1)
+            selectAnimIndex(-1)
         }
     }, [visible, isStandalone ? rpcState.geosetAnims : modelData?.GeosetAnims, isStandalone ? rpcState.geosets : modelData?.Geosets])
 
@@ -145,7 +157,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             if (pickedGeosetIndex === null || localAnims.length === 0) return
             const matchingIndex = localAnims.findIndex((anim: any) => anim.GeosetId === pickedGeosetIndex)
             if (matchingIndex !== -1) {
-                setSelectedIndex(matchingIndex)
+                selectAnimIndex(matchingIndex)
                 setTimeout(() => scrollToItem(matchingIndex), 0)            }
         }
 
@@ -231,9 +243,9 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         setLocalAnims(newAnims)
         saveToBackend(newAnims)
         if (selectedIndex === index) {
-            setSelectedIndex(-1)
+            selectAnimIndex(-1)
         } else if (selectedIndex > index) {
-            setSelectedIndex(selectedIndex - 1)
+            selectAnimIndex(selectedIndex - 1)
         }
     }
 
@@ -393,7 +405,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                 const newAnims = [...localAnims, newAnim]
                                 setLocalAnims(newAnims)
                                 saveToBackend(newAnims)
-                                setSelectedIndex(newAnims.length - 1)
+                                selectAnimIndex(newAnims.length - 1)
                             }}
                             style={{ backgroundColor: '#5a9cff', borderColor: '#5a9cff' }}
                         >
@@ -404,7 +416,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                         dataSource={localAnims}
                         renderItem={(_item, index) => (
                             <List.Item
-                                onClick={() => setSelectedIndex(index)}
+                                onClick={() => selectAnimIndex(index)}
                                 style={{
                                     cursor: 'pointer',
                                     padding: '8px 12px',

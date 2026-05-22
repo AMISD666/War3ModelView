@@ -2,6 +2,7 @@
 
 mod activation;
 mod activation_commands;
+mod action_name_mapping;
 mod app_paths;
 mod app_settings;
 mod copy_utils;
@@ -12,6 +13,7 @@ mod model_manifest;
 mod mpq_manager;
 mod remote_activation_policy;
 mod secure_fs;
+mod startup_diagnostics;
 mod texture_decode;
 mod texture_encode;
 
@@ -1592,6 +1594,7 @@ fn get_cli_file_path() -> Option<String> {
 #[tauri::command]
 fn get_cli_file_paths() -> Vec<String> {
     if CLI_ARGS_CONSUMED.swap(true, Ordering::SeqCst) {
+        startup_diagnostics::mark("backend.cli_file_paths.already_consumed", json!({}));
         return Vec::new();
     }
 
@@ -1600,17 +1603,27 @@ fn get_cli_file_paths() -> Vec<String> {
         .iter()
         .any(|a| a == "--copy-model" || a == "--delete-model")
     {
+        startup_diagnostics::mark(
+            "backend.cli_file_paths.skipped_special_mode",
+            json!({ "args": &args }),
+        );
         return Vec::new();
     }
     // Collect ALL model files from CLI args
-    args.iter()
+    let paths: Vec<String> = args
+        .iter()
         .skip(1)
         .filter(|arg| {
             let lower = arg.to_lowercase();
             lower.ends_with(".mdx") || lower.ends_with(".mdl")
         })
         .cloned()
-        .collect()
+        .collect();
+    startup_diagnostics::mark(
+        "backend.cli_file_paths.consumed",
+        json!({ "pathCount": paths.len(), "paths": &paths, "args": &args }),
+    );
+    paths
 }
 
 #[tauri::command]
@@ -1618,6 +1631,10 @@ fn get_pending_open_files() -> Vec<String> {
     let mut pending = PENDING_FILES.lock().unwrap();
     let files = pending.clone();
     pending.clear();
+    startup_diagnostics::mark(
+        "backend.pending_open_files.consumed",
+        json!({ "pathCount": files.len(), "paths": &files }),
+    );
     files
 }
 
@@ -1684,8 +1701,21 @@ fn cleanup_temp_cache() {
 }
 
 fn main() {
+    startup_diagnostics::reset_log();
+    startup_diagnostics::mark(
+        "backend.main.enter",
+        json!({
+            "args": std::env::args().collect::<Vec<_>>(),
+            "currentExe": std::env::current_exe().ok().map(|path| path.display().to_string()),
+        }),
+    );
+
     let delete_paths = get_cli_delete_paths();
     if let Some(delete_paths) = delete_paths {
+        startup_diagnostics::mark(
+            "backend.cli.delete_mode",
+            json!({ "pathCount": delete_paths.len() }),
+        );
         let log_root = match app_paths::get_app_storage_root() {
             Ok(root) => root,
             Err(_) => {
@@ -1723,6 +1753,10 @@ fn main() {
 
     let copy_paths = get_cli_copy_paths();
     if let Some(copy_paths) = copy_paths {
+        startup_diagnostics::mark(
+            "backend.cli.copy_mode",
+            json!({ "pathCount": copy_paths.len() }),
+        );
         let storage_root = match app_paths::get_app_storage_root() {
             Ok(root) => root.join("temp"),
             Err(_) => {
@@ -1844,8 +1878,10 @@ fn main() {
     }
 
     // Run temp-cache cleanup in the background so it doesn't delay window creation
+    startup_diagnostics::mark("backend.temp_cleanup.spawn", json!({}));
     std::thread::spawn(|| cleanup_temp_cache());
 
+    startup_diagnostics::mark("backend.builder.start", json!({}));
     tauri::Builder::default()
         .manage(MpqManager::new())
         .manage(TextureBatchCache::new())
@@ -1855,17 +1891,28 @@ fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
+            startup_diagnostics::mark("backend.setup.enter", json!({}));
             if let Some(window) = app.get_webview_window("main") {
+                startup_diagnostics::mark("backend.main_window.found", json!({}));
                 apply_main_window_layout(&window)?;
+                startup_diagnostics::mark("backend.main_window.layout_applied", json!({}));
+            } else {
+                startup_diagnostics::mark("backend.main_window.missing", json!({}));
             }
+            startup_diagnostics::mark("backend.setup.exit", json!({}));
             Ok(())
         })
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            startup_diagnostics::mark(
+                "backend.single_instance.event",
+                json!({ "args": &args, "cwd": &_cwd }),
+            );
             // Restore and focus main window (unminimize if needed, show if hidden)
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
+                startup_diagnostics::mark("backend.single_instance.window_focused", json!({}));
             }
             // Collect all model files from args and emit them
             let model_paths: Vec<String> = args
@@ -1879,6 +1926,10 @@ fn main() {
                 .collect();
 
             if !model_paths.is_empty() {
+                startup_diagnostics::mark(
+                    "backend.single_instance.model_paths",
+                    json!({ "pathCount": model_paths.len(), "paths": &model_paths }),
+                );
                 // Push to pending buffer (for missed events during startup)
                 {
                     let mut pending = PENDING_FILES.lock().unwrap();
@@ -1918,6 +1969,7 @@ fn main() {
             clear_texture_batch_cache,
             get_texture_batch_cache_stats,
             encode_texture_image,
+            startup_diagnostics::startup_diagnostics_mark,
             detect_warcraft_path,
             toggle_console,
             debug_log,

@@ -21,21 +21,34 @@ export const remapGeosetAnimsAfterRemovingGeosets = (
     geosetAnims: readonly any[] | null | undefined,
     removedGeosetIndices: readonly number[]
 ): any[] => {
+    return remapGeosetAnimsWithIndexMapAfterRemovingGeosets(geosetAnims, removedGeosetIndices).geosetAnims
+}
+
+export const remapGeosetAnimsWithIndexMapAfterRemovingGeosets = (
+    geosetAnims: readonly any[] | null | undefined,
+    removedGeosetIndices: readonly number[]
+): { geosetAnims: any[]; geosetAnimIndexMap: Map<number, number> } => {
     const removedIndices = Array.from(
         new Set(removedGeosetIndices.filter((index) => Number.isInteger(index) && index >= 0))
     ).sort((a, b) => a - b)
 
     if (removedIndices.length === 0) {
-        return cloneGeosetAnims(geosetAnims)
+        const geosetAnimsSnapshot = cloneGeosetAnims(geosetAnims)
+        return {
+            geosetAnims: geosetAnimsSnapshot,
+            geosetAnimIndexMap: new Map(geosetAnimsSnapshot.map((_anim, index) => [index, index]))
+        }
     }
 
     const removedSet = new Set(removedIndices)
     const usedGeosetIds = new Set<number>()
     const nextGeosetAnims: any[] = []
+    const geosetAnimIndexMap = new Map<number, number>()
 
-    for (const anim of cloneGeosetAnims(geosetAnims)) {
+    for (const [oldIndex, anim] of cloneGeosetAnims(geosetAnims).entries()) {
         const geosetId = anim?.GeosetId
         if (typeof geosetId !== 'number' || geosetId < 0) {
+            geosetAnimIndexMap.set(oldIndex, nextGeosetAnims.length)
             nextGeosetAnims.push(anim)
             continue
         }
@@ -52,13 +65,14 @@ export const remapGeosetAnimsAfterRemovingGeosets = (
             continue
         }
         usedGeosetIds.add(nextGeosetId)
+        geosetAnimIndexMap.set(oldIndex, nextGeosetAnims.length)
         nextGeosetAnims.push({
             ...anim,
             GeosetId: nextGeosetId
         })
     }
 
-    return nextGeosetAnims
+    return { geosetAnims: nextGeosetAnims, geosetAnimIndexMap }
 }
 
 export const syncRendererGeosetAnims = (renderer: any, geosetAnims: readonly any[]): any[] => {

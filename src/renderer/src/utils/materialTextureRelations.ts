@@ -101,6 +101,8 @@ export function remapTextureRefAfterRemoval(value: any, removedIndex: number, fa
 }
 
 export function remapMaterialsAfterTextureRemoval(materials: any[], removedIndex: number, nextTextureCount: number): any[] {
+    const fallbackIndex = removedIndex < nextTextureCount ? removedIndex : -1
+
     return (Array.isArray(materials) ? materials : []).map((material: any) => {
         const nextMaterial = cloneStructured(material)
         if (!Array.isArray(nextMaterial?.Layers)) {
@@ -111,7 +113,7 @@ export function remapMaterialsAfterTextureRemoval(materials: any[], removedIndex
             const nextLayer = cloneStructured(layer)
             for (const key of MATERIAL_TEXTURE_REF_KEYS) {
                 if (nextLayer?.[key] !== undefined) {
-                    nextLayer[key] = remapTextureRefAfterRemoval(nextLayer[key], removedIndex, -1)
+                    nextLayer[key] = remapTextureRefAfterRemoval(nextLayer[key], removedIndex, fallbackIndex)
                 }
             }
             return nextLayer
@@ -127,12 +129,13 @@ export function remapParticleEmittersAfterTextureRemoval(
     nextTextureCount: number,
 ): any[] | undefined {
     if (!Array.isArray(emitters)) return undefined
+    const fallbackIndex = removedIndex < nextTextureCount ? removedIndex : -1
 
     return emitters.map((emitter: any) => {
         const nextEmitter = cloneStructured(emitter)
         const key = nextEmitter.TextureID !== undefined ? 'TextureID' : 'TextureId'
         if (nextEmitter[key] !== undefined) {
-            nextEmitter[key] = remapTextureRefAfterRemoval(nextEmitter[key], removedIndex, -1)
+            nextEmitter[key] = remapTextureRefAfterRemoval(nextEmitter[key], removedIndex, fallbackIndex)
         }
         return nextEmitter
     })

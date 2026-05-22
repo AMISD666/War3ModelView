@@ -115,6 +115,7 @@ import { getBasename, getDirname, joinPath, normalizeWindowsPath } from '../util
 import { requireProFeature } from '../utils/featureGate'
 import { getGeosetVertexCount } from '../commands/AutoSeparateLayersSplitter'
 import { AboutDialog } from './shell/AboutDialog'
+import { markStartupNow, markStartupOnce } from '../application/diagnostics/startupDiagnostics'
 
 const toArrayBuffer = (value: ArrayBuffer | Uint8Array): ArrayBuffer => {
     if (value instanceof ArrayBuffer) return value
@@ -225,6 +226,7 @@ const buildFbxBatchMergeTabPath = (paths: string[]): string => {
 }
 
 const MainLayout: React.FC = () => {
+    markStartupOnce('frontend.main_layout.render')
     // Zustand stores
     const modelPath = useModelStore(state => state.modelPath)
     const activeTabId = useModelStore(state => state.activeTabId)
@@ -1078,9 +1080,16 @@ const MainLayout: React.FC = () => {
     const handleCopyModelRef = useRef<() => void>(() => { })
     const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => getRecentFiles())
 
-    const openModelAsTab = useCallback((filePath: string) => {        setIsLoading(true)
+    useEffect(() => {
+        markStartupNow('frontend.main_layout.mounted')
+    }, [])
+
+    const openModelAsTab = useCallback((filePath: string) => {
+        markStartupNow('frontend.main_layout.open_model_as_tab_start', { path: filePath })
+        setIsLoading(true)
         setZustandLoading(true)
         const added = addTab(filePath)
+        markStartupNow('frontend.main_layout.open_model_as_tab_done', { path: filePath, added })
         if (!added) {
             setIsLoading(false)
             setZustandLoading(false)
@@ -1091,11 +1100,18 @@ const MainLayout: React.FC = () => {
     const preloadSavedMpqPaths = useCallback(async () => {
         const savedPaths = localStorage.getItem('mpq_paths')
         if (!savedPaths || useRendererStore.getState().mpqLoaded) {
+            markStartupNow('frontend.main_layout.mpq_preload_skipped', {
+                hasSavedPaths: Boolean(savedPaths),
+                mpqLoaded: useRendererStore.getState().mpqLoaded,
+            })
             return
         }
 
         try {
             const paths = JSON.parse(savedPaths)
+            markStartupNow('frontend.main_layout.mpq_preload_start', {
+                pathCount: Array.isArray(paths) ? paths.length : 0,
+            })
             try {
                 await desktopGateway.invoke('set_mpq_paths', { paths })
             } catch (error) {
@@ -1109,7 +1125,14 @@ const MainLayout: React.FC = () => {
                 setMpqLoaded(true)
                 bumpAssetRevision('model_open_mpq_preload')
             }
+            markStartupNow('frontend.main_layout.mpq_preload_done', {
+                pathCount: Array.isArray(paths) ? paths.length : 0,
+                successCount,
+            })
         } catch (error) {
+            markStartupNow('frontend.main_layout.mpq_preload_failed', {
+                error: error instanceof Error ? error.message : String(error),
+            })
             console.error('[MainLayout] MPQ pre-load failed:', error)
         }
     }, [bumpAssetRevision, setMpqLoaded])
@@ -1117,6 +1140,11 @@ const MainLayout: React.FC = () => {
     const openModelPaths = useCallback(async (request: ModelOpenFilesRequest) => {
         const paths = Array.isArray(request.paths) ? request.paths : []
         if (paths.length === 0) return []
+        markStartupNow('frontend.main_layout.open_model_paths_start', {
+            source: request.source ?? '',
+            pathCount: paths.length,
+            paths,
+        })
 
         if (useSelectionStore.getState().mainMode === 'retarget') {
             const openedPaths = await openRetargetTargetPaths({
@@ -1126,11 +1154,15 @@ const MainLayout: React.FC = () => {
                 setRecentFiles,
             })
             setIsLoading(false); setZustandLoading(false)
+            markStartupNow('frontend.main_layout.open_model_paths_retarget_done', {
+                openedCount: openedPaths.length,
+                openedPaths,
+            })
             return openedPaths
         }
 
         await preloadSavedMpqPaths()
-        return openModelWorkflow.openPathsSequentially({
+        const openedPaths = await openModelWorkflow.openPathsSequentially({
             paths,
             source: request.source ?? 'external-open',
             addToRecent: request.addToRecent ?? true,
@@ -1141,6 +1173,12 @@ const MainLayout: React.FC = () => {
             openModelAsTab,
             setRecentFiles,
         })
+        markStartupNow('frontend.main_layout.open_model_paths_done', {
+            source: request.source ?? '',
+            openedCount: openedPaths.length,
+            openedPaths,
+        })
+        return openedPaths
     }, [openModelAsTab, preloadSavedMpqPaths, setZustandLoading])
 
     const hasResetStore = useRef(false);
@@ -1330,7 +1368,12 @@ const MainLayout: React.FC = () => {
     useEffect(() => {
         const checkCliCopyPath = async () => {
             try {
+                markStartupNow('frontend.main_layout.cli_copy_check_start')
                 const copyPath = await desktopGateway.invoke<string | null>('get_cli_copy_path');
+                markStartupNow('frontend.main_layout.cli_copy_check_done', {
+                    hasCopyPath: Boolean(copyPath),
+                    copyPath: copyPath ?? '',
+                })
                 if (copyPath) {
                     const result = await desktopGateway.invoke<string>('copy_model_with_textures', { modelPath: copyPath });
                     showMessage('success', '??', result);
@@ -1346,12 +1389,19 @@ const MainLayout: React.FC = () => {
         const checkCliFilePath = async () => {
             if (hasCheckedCli.current) return;
             hasCheckedCli.current = true;
+            markStartupNow('frontend.main_layout.cli_file_check_start')
 
             const copyHandled = await checkCliCopyPath();
             if (copyHandled) return;
             try {
                 const cliPaths = await desktopGateway.invoke<string[]>('get_cli_file_paths');
                 const pendingPaths = await desktopGateway.invoke<string[]>('get_pending_open_files');
+                markStartupNow('frontend.main_layout.cli_file_check_done', {
+                    cliPathCount: cliPaths.length,
+                    pendingPathCount: pendingPaths.length,
+                    cliPaths,
+                    pendingPaths,
+                })
 
                 // Combine and unique
                 const allPaths = Array.from(new Set([...cliPaths, ...pendingPaths]));
@@ -1365,6 +1415,9 @@ const MainLayout: React.FC = () => {
                     })
                 }
             } catch (e) {
+                markStartupNow('frontend.main_layout.cli_file_check_failed', {
+                    error: e instanceof Error ? e.message : String(e),
+                })
                 console.error('[MainLayout] Failed to get CLI file paths:', e);
             }
         };
@@ -2111,8 +2164,7 @@ const MainLayout: React.FC = () => {
     }
 
     const showTextureFailureWarnings = (
-        textureEncodeResult: TextureAssetOperationResult,
-        textureCopyResult?: TextureAssetOperationResult
+        textureEncodeResult: TextureAssetOperationResult
     ) => {
         if (textureEncodeResult.failed.length > 0) {
             const lines = textureEncodeResult.failed.slice(0, 3).join('n');
@@ -2120,14 +2172,6 @@ const MainLayout: React.FC = () => {
                 'warning',
                 '部分贴图写出失败',
                 `${textureEncodeResult.failed.length} 个贴图写出失败：n${lines}${textureEncodeResult.failed.length > 3 ? 'n...' : ''}`
-            );
-        }
-        if (textureCopyResult && textureCopyResult.failed.length > 0) {
-            const lines = textureCopyResult.failed.slice(0, 3).join('n');
-            showMessage(
-                'warning',
-                '部分贴图复制失败',
-                `${textureCopyResult.failed.length} 个贴图复制失败：n${lines}${textureCopyResult.failed.length > 3 ? 'n...' : ''}`
             );
         }
     }
@@ -2225,7 +2269,6 @@ const MainLayout: React.FC = () => {
                             textureSaveMode: rendererState.textureSaveMode,
                             textureSaveSuffix: rendererState.textureSaveSuffix,
                         },
-                        copyReferencedTextures: true,
                         encodeAdjustedTextures: true,
                         validationContext: 'saveAs',
                         confirmValidation: ({ context, validationErrors }) => confirmSaveValidation(context, validationErrors),
@@ -2243,7 +2286,7 @@ const MainLayout: React.FC = () => {
                 if (!saveResult) {
                     return false;
                 }
-                showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
+                showTextureFailureWarnings(saveResult.textureEncodeResult);
                 showMessage('success', '另存为成功', '模型已另存为: ' + selected)
                 return true;
             }
@@ -2462,7 +2505,6 @@ const MainLayout: React.FC = () => {
                             textureSaveMode: rendererState.textureSaveMode,
                             textureSaveSuffix: rendererState.textureSaveSuffix,
                         },
-                        copyReferencedTextures: true,
                         encodeAdjustedTextures: true,
                         format: 'mdl',
                         validationContext: 'export',
@@ -2475,7 +2517,7 @@ const MainLayout: React.FC = () => {
                     return;
                 }
 
-                showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
+                showTextureFailureWarnings(saveResult.textureEncodeResult);
                 showMessage('success', '导出成功', '已导出为 MDL: ' + filePath)
                 isSavingRef.current = false
             }
@@ -2526,7 +2568,6 @@ const MainLayout: React.FC = () => {
                             textureSaveMode: rendererState.textureSaveMode,
                             textureSaveSuffix: rendererState.textureSaveSuffix,
                         },
-                        copyReferencedTextures: true,
                         encodeAdjustedTextures: true,
                         format: 'mdx',
                         validationContext: 'export',
@@ -2539,7 +2580,7 @@ const MainLayout: React.FC = () => {
                     return;
                 }
 
-                showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
+                showTextureFailureWarnings(saveResult.textureEncodeResult);
                 showMessage('success', '导出成功', '已导出为 MDX: ' + filePath)
                 isSavingRef.current = false
             }
@@ -2600,7 +2641,6 @@ const MainLayout: React.FC = () => {
                         textureSaveMode: rendererState.textureSaveMode,
                         textureSaveSuffix: rendererState.textureSaveSuffix,
                     },
-                    copyReferencedTextures: true,
                     encodeAdjustedTextures: true,
                     format: targetExt === '.mdl' ? 'mdl' : 'mdx',
                     validationContext: 'convert',
@@ -2613,7 +2653,7 @@ const MainLayout: React.FC = () => {
                 return false
             }
 
-            showTextureFailureWarnings(saveResult.textureEncodeResult, saveResult.textureCopyResult);
+            showTextureFailureWarnings(saveResult.textureEncodeResult);
             useGlobalColorAdjustStore.getState().resetSettings();
             await openModelPaths({
                 paths: [targetPath],

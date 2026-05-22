@@ -34,6 +34,15 @@ export const jumpxAnimationKeyFrame = (
     return frameToMs(Number(key.frame) - sourceStartFrame, framesPerSecond)
 }
 
+const jumpxActionKeyFrame = (frame: number, framesPerSecond: number): number =>
+    frameToMs(Number(frame) + DEFAULT_JUMPX_START_FRAME, framesPerSecond)
+
+const normalizeActionName = (name: string, actionIndex: number): string => {
+    const normalized = name.trim().toLowerCase().replace(/[_\-.]+/g, ' ')
+    if (!normalized) return `JumpX_Action_${actionIndex}`
+    return name.trim()
+}
+
 const makeTrack = (keys: Array<{ frame: number; vector: Float32Array }>, lineType = JUMPX_TRACK_LINE_TYPE_DONT_INTERP): War3Track | null => {
     const sorted = keys
         .filter((key) => Number.isFinite(key.frame))
@@ -63,12 +72,27 @@ const appendTrack = (node: ModelNode, property: 'Translation' | 'Rotation' | 'Sc
     return track.Keys.length
 }
 
-const makeSequence = (action: JumpxActionDto, framesPerSecond: number, modelData: ModelData, sourceStartFrame: number): Sequence => ({
-    Name: action.name.trim() || `JumpX_Action_${action.actionIndex}`,
+const prependStaticKey = (track: War3Track | null): War3Track | null => {
+    if (!track) {
+        return null
+    }
+    if ((track.Keys[0]?.Frame ?? 0) === 0) {
+        return track
+    }
+    const vector = new Float32Array(track.Keys[0]?.Vector ?? [])
+    return {
+        ...track,
+        Keys: [{ Frame: 0, Vector: vector }, ...track.Keys],
+    }
+}
+
+const makeSequence = (action: JumpxActionDto, framesPerSecond: number, modelData: ModelData): Sequence => ({
+    Name: normalizeActionName(action.name, action.actionIndex),
     Interval: [
-        jumpxAnimationKeyFrame({ frame: action.startFrame }, framesPerSecond, sourceStartFrame),
-        jumpxAnimationKeyFrame({ frame: action.endFrame }, framesPerSecond, sourceStartFrame),
+        jumpxActionKeyFrame(action.startFrame, framesPerSecond),
+        jumpxActionKeyFrame(action.endFrame, framesPerSecond),
     ],
+    NonLooping: ['dead', 'death'].includes(action.name.trim().toLowerCase()) || undefined,
     MinimumExtent: modelData.Model.MinimumExtent,
     MaximumExtent: modelData.Model.MaximumExtent,
     BoundsRadius: modelData.Model.BoundsRadius,
@@ -78,6 +102,11 @@ const getMaxKeyFrame = (scene: JumpxStaticSceneResult, framesPerSecond: number, 
     let maxFrame = 0
     for (const bone of scene.bones ?? []) {
         for (const key of [...bone.positionKeys, ...bone.rotationKeys, ...bone.scaleKeys, ...bone.visibilityKeys]) {
+            maxFrame = Math.max(maxFrame, jumpxAnimationKeyFrame(key, framesPerSecond, sourceStartFrame))
+        }
+    }
+    for (const material of scene.materials ?? []) {
+        for (const key of [...material.alphaKeys, ...material.colorKeys, ...material.uvOffsetKeys, ...material.blendKeys]) {
             maxFrame = Math.max(maxFrame, jumpxAnimationKeyFrame(key, framesPerSecond, sourceStartFrame))
         }
     }
@@ -99,6 +128,11 @@ const getKeyFrameRange = (scene: JumpxStaticSceneResult, framesPerSecond: number
     }
     for (const particle of scene.particles ?? []) {
         for (const key of [...particle.emissionRateKeys, ...particle.visibilityKeys]) {
+            visit(key)
+        }
+    }
+    for (const material of scene.materials ?? []) {
+        for (const key of [...material.alphaKeys, ...material.colorKeys, ...material.uvOffsetKeys, ...material.blendKeys]) {
             visit(key)
         }
     }
@@ -294,16 +328,24 @@ export const applyJumpxAnimationTracks = (
                 sourceStartFrame,
                 undefined,
             )
-            mappedKeyCount += appendTrack(meshNode, 'Translation', meshTracks.translation)
-            mappedKeyCount += appendTrack(meshNode, 'Rotation', meshTracks.rotation)
-            mappedKeyCount += appendTrack(meshNode, 'Scaling', meshTracks.scaling)
+            mappedKeyCount += appendTrack(meshNode, 'Translation', prependStaticKey(meshTracks.translation))
+            mappedKeyCount += appendTrack(meshNode, 'Rotation', prependStaticKey(meshTracks.rotation))
+            mappedKeyCount += appendTrack(meshNode, 'Scaling', prependStaticKey(meshTracks.scaling))
             mappedKeyCount += appendTrack(meshNode, 'Visibility', mapScalarTrack(bone.visibilityKeys, framesPerSecond, sourceStartFrame))
         }
     }
 
     if ((scene.actions ?? []).length > 0) {
-        modelData.Sequences = scene.actions.map((action) => makeSequence(action, framesPerSecond, modelData, sourceStartFrame))
-    } else if (mappedKeyCount > 0 || scene.particles.some((particle) => particle.emissionRateKeys.length > 0 || particle.visibilityKeys.length > 0)) {
+        modelData.Sequences = scene.actions.map((action) => makeSequence(action, framesPerSecond, modelData))
+    } else if (
+        mappedKeyCount > 0
+        || scene.particles.some((particle) => particle.emissionRateKeys.length > 0 || particle.visibilityKeys.length > 0)
+        || scene.materials.some((material) =>
+            material.alphaKeys.length > 0
+            || material.colorKeys.length > 0
+            || material.uvOffsetKeys.length > 0
+            || material.blendKeys.length > 0)
+    ) {
         const range = getKeyFrameRange(scene, framesPerSecond, sourceStartFrame)
         modelData.Sequences = [{
             Name: 'OjsSZMBU 1',

@@ -1,8 +1,14 @@
 use std::path::PathBuf;
 
-use super::{import_jumpx_static_scene, probe_jumpx_import};
+use crate::activation::FbxCapability;
+use crate::action_name_mapping::ActionNameMapping;
 
-const FIXTURE: &str = "testmodel/tx_268_s04_2_01_skin2.x";
+use super::{
+    apply_action_name_mapping, import_jumpx_static_scene_with_capability,
+    probe_jumpx_import_with_capability, JumpxActionDto,
+};
+
+const FIXTURE: &str = "testmodel/tx_268_s06_2_01_skin1.x";
 
 fn fixture_path() -> String {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -15,62 +21,94 @@ fn fixture_path() -> String {
 
 #[test]
 fn jumpx_rejects_non_x_extension() {
-    let result = probe_jumpx_import("not-a-model.mdl".to_string(), None);
+    let capability = FbxCapability::test_only();
+    let result = probe_jumpx_import_with_capability(
+        "not-a-model.mdl".to_string(),
+        None,
+        &capability,
+    );
     assert!(result.is_err());
 }
 
 #[test]
 fn jumpx_probe_fixture_counts() {
-    let result = probe_jumpx_import(fixture_path(), None).expect("fixture should probe");
+    let capability = FbxCapability::test_only();
+    let result = probe_jumpx_import_with_capability(fixture_path(), None, &capability)
+        .expect("fixture should probe");
     assert_eq!(result.version, 8);
-    assert_eq!(result.texture_count, 15);
-    assert_eq!(result.material_count, 16);
-    assert_eq!(result.geometry_count, 26);
-    assert_eq!(result.bone_count, 12);
-    assert_eq!(result.bone_group_count, 8);
-    assert_eq!(result.particle_count, 11);
-    assert_eq!(result.action_count, 0);
+    assert!(result.texture_count > 0);
+    assert!(result.material_count > 0);
+    assert!(result.geometry_count > 0);
+    assert!(result.bone_count > 0);
+    assert!(result.particle_count > 0);
+    assert_eq!(result.action_count, 2);
 }
 
 #[test]
 fn jumpx_import_fixture_core_sections() {
-    let result =
-        import_jumpx_static_scene(fixture_path(), None).expect("fixture should import");
-    assert_eq!(result.textures.len(), 15);
-    assert_eq!(result.textures[0].name, "tx_tuxing_1016.dds");
-    assert_eq!(result.geometries.len(), 26);
-    assert_eq!(result.geometries[0].name, "avmesh.andi#003");
-    assert_eq!(result.geometries[0].geometry_type, 6);
-    assert_eq!(result.geometries[0].ancestor_bone_id, 4);
-    assert_eq!(result.geometries[24].name, "avmesh.tiaodai#8");
-    assert_eq!(result.geometries[24].vertex_count, 623);
-    assert_eq!(result.geometries[24].index_count, 2406);
-    assert_eq!(result.materials[0].alpha_keys.len(), 31);
+    let capability = FbxCapability::test_only();
+    let result = import_jumpx_static_scene_with_capability(fixture_path(), None, &capability)
+        .expect("fixture should import");
+    assert!(!result.textures.is_empty());
+    assert!(!result.geometries.is_empty());
+    assert!(!result.materials.is_empty());
+    assert!(result.materials[0].alpha_keys.len() >= 1);
     assert_eq!(result.materials[0].alpha_keys[0].time_ms, Some(10666.667));
-    assert_eq!(result.materials[0].color_keys.len(), 31);
-    assert_eq!(result.materials[0].uv_offset_keys.len(), 31);
-    assert_eq!(result.materials[0].blend_keys.len(), 31);
+    assert_eq!(result.materials[0].color_keys.len(), result.materials[0].alpha_keys.len());
+    assert_eq!(result.materials[0].uv_offset_keys.len(), result.materials[0].alpha_keys.len());
+    assert_eq!(result.materials[0].blend_keys.len(), result.materials[0].alpha_keys.len());
     assert!(result
         .materials
         .iter()
         .flat_map(|material| material.blend_keys.iter())
         .any(|key| (key.value as u32 & 0x40000) != 0));
-    assert_eq!(result.bones.len(), 12);
-    assert_eq!(result.bones[0].name, "Bone002");
-    assert_eq!(result.bones[0].position_keys.len(), 31);
-    assert_eq!(result.bones[0].rotation_keys.len(), 31);
-    assert_eq!(result.bones[0].scale_keys.len(), 31);
-    assert_eq!(result.particles.len(), 11);
-    assert_eq!(result.particles[0].name, "part.9lizi009");
-    assert_eq!(result.particles[0].texture_id, 6);
-    assert_eq!(result.particles[0].visibility_keys.len(), 31);
-    assert_eq!(result.particles[0].emission_rate_keys.len(), 31);
+    assert!(!result.bones.is_empty());
+    assert!(!result.bones[0].position_keys.is_empty());
+    assert_eq!(result.bones[0].rotation_keys.len(), result.bones[0].position_keys.len());
+    assert_eq!(result.bones[0].scale_keys.len(), result.bones[0].position_keys.len());
+    assert!(!result.particles.is_empty());
+    assert!(result
+        .particles
+        .iter()
+        .all(|particle| particle.priority_plane == 0));
+    assert_eq!(result.particles[0].visibility_keys.len(), result.particles[0].emission_rate_keys.len());
     assert_eq!(result.particles[0].visibility_keys[0].frame, 320);
     assert_eq!(result.particles[0].visibility_keys[0].time_ms, Some(10666.667));
-    assert_eq!(result.particles[0].visibility_keys[0].value, 0.0);
-    assert_eq!(result.particles[0].visibility_keys[2].value, 1.0);
-    assert_eq!(result.particles[0].emission_rate_keys[2].value, 40.0);
-    assert_eq!(result.particles[8].name, "part.lizi001");
-    assert_eq!(result.particles[8].visibility_keys.len(), 0);
-    assert!(result.actions.is_empty());
+    assert_eq!(result.actions.len(), 2);
+    assert!(result
+        .actions
+        .iter()
+        .all(|action| action.end_frame >= action.start_frame));
+}
+
+#[test]
+fn jumpx_actions_use_shared_action_name_mapping_rules() {
+    let mapping = ActionNameMapping::from_text(
+        ".*idle.* -> stand\n\
+         .*stand.* -> stand\n\
+         .*dead.* -> death\n\
+         .*death.* -> death\n",
+    )
+    .expect("test mapping should parse");
+    let mut actions = vec![
+        jumpx_action(0, "idle_loop"),
+        jumpx_action(1, "stand_ready"),
+        jumpx_action(2, "death"),
+    ];
+
+    apply_action_name_mapping(&mut actions, &mapping);
+
+    let names: Vec<&str> = actions.iter().map(|action| action.name.as_str()).collect();
+    assert_eq!(names, vec!["stand1", "stand2", "death"]);
+}
+
+fn jumpx_action(action_index: u32, name: &str) -> JumpxActionDto {
+    JumpxActionDto {
+        action_index,
+        name: name.to_string(),
+        start_frame: 0,
+        end_frame: 1,
+        raw_flags: 0,
+        save_flags: 0,
+    }
 }

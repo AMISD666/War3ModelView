@@ -1,4 +1,3 @@
-mod action_name_mapping;
 mod convert;
 mod native;
 mod types;
@@ -10,7 +9,7 @@ pub use types::*;
 
 use crate::activation;
 use crate::activation::FbxCapability;
-use action_name_mapping::load_action_name_mapping_from_exe_dir;
+use crate::action_name_mapping::load_action_name_mapping_from_exe_dir;
 use convert::{
     animation_stack_from_native, bone_from_native, material_from_native, native_error_message,
     native_f32_vec, native_optional_index, native_string, native_u32_vec, native_u8_vec,
@@ -184,7 +183,18 @@ fn import_fbx_static_scene_unchecked(
         .map(animation_stack_from_native)
         .collect();
     if let Some(mapping) = load_action_name_mapping_from_exe_dir() {
-        mapping.apply_to_animation_stacks(&mut animation_stacks);
+        let raw_names: Vec<String> = animation_stacks
+            .iter()
+            .map(|stack| stack.name.clone())
+            .collect();
+        for (stack, mapped_name) in animation_stacks
+            .iter_mut()
+            .zip(mapping.map_sequence_names(&raw_names))
+        {
+            if let Some(name) = mapped_name {
+                stack.name = name;
+            }
+        }
     }
 
     let probe = probe_result_from_native(

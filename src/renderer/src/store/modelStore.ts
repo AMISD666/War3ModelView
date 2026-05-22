@@ -166,6 +166,73 @@ function sanitizeNodesArray(nodes: any): ModelNode[] {
     ) as ModelNode[];
 }
 
+const isKnownNodeType = (value: unknown): value is NodeType =>
+    typeof value === 'string' && Object.values(NodeType).includes(value as NodeType);
+
+const inferNodeTypeFromRawNode = (node: Record<string, unknown>): NodeType => {
+    if (isKnownNodeType(node.type)) return node.type;
+
+    // Raw MDX Nodes entries do not carry a type field. Bones can still be
+    // identified by their bone-only fields, even when both refs are null.
+    if ('GeosetId' in node || 'GeosetAnimId' in node) {
+        return NodeType.BONE;
+    }
+
+    return NodeType.HELPER;
+};
+
+const NODE_TYPE_COLLECTIONS: Array<{ keys: string[]; type: NodeType }> = [
+    { keys: ['Bone', 'Bones'], type: NodeType.BONE },
+    { keys: ['Light', 'Lights'], type: NodeType.LIGHT },
+    { keys: ['Helper', 'Helpers'], type: NodeType.HELPER },
+    { keys: ['Attachment', 'Attachments'], type: NodeType.ATTACHMENT },
+    { keys: ['ParticleEmitter', 'ParticleEmitters'], type: NodeType.PARTICLE_EMITTER },
+    { keys: ['ParticleEmitter2', 'ParticleEmitters2'], type: NodeType.PARTICLE_EMITTER_2 },
+    { keys: ['ParticleEmitterPopcorn', 'ParticleEmitterPopcorns'], type: NodeType.PARTICLE_EMITTER_POPCORN },
+    { keys: ['RibbonEmitter', 'RibbonEmitters'], type: NodeType.RIBBON_EMITTER },
+    { keys: ['EventObject', 'EventObjects'], type: NodeType.EVENT_OBJECT },
+    { keys: ['CollisionShape', 'CollisionShapes'], type: NodeType.COLLISION_SHAPE },
+    { keys: ['Camera', 'Cameras'], type: NodeType.CAMERA },
+];
+
+const buildNodeTypeMapFromModelData = (modelData: ModelData | null): Map<number, NodeType> => {
+    const typeByObjectId = new Map<number, NodeType>();
+    if (!modelData) return typeByObjectId;
+
+    const data = modelData as unknown as Record<string, unknown>;
+    for (const collection of NODE_TYPE_COLLECTIONS) {
+        const items = collection.keys
+            .map((key) => data[key])
+            .find((value): value is unknown[] => Array.isArray(value));
+        if (!items) continue;
+
+        items.forEach((item) => {
+            if (item === null || typeof item !== 'object') return;
+            const objectId = (item as Record<string, unknown>).ObjectId;
+            if (typeof objectId === 'number' && !Number.isNaN(objectId)) {
+                typeByObjectId.set(objectId, collection.type);
+            }
+        });
+    }
+
+    return typeByObjectId;
+};
+
+const restoreNodeTypesFromModelData = (nodes: ModelNode[], modelData: ModelData | null): ModelNode[] => {
+    const typeByObjectId = buildNodeTypeMapFromModelData(modelData);
+    if (typeByObjectId.size === 0) return nodes;
+
+    let changed = false;
+    const restored = nodes.map((node) => {
+        const expectedType = typeByObjectId.get(node.ObjectId);
+        if (!expectedType || node.type === expectedType) return node;
+        changed = true;
+        return { ...node, type: expectedType } as ModelNode;
+    });
+
+    return changed ? restored : nodes;
+};
+
 const markActiveTabDirtyState = (state: { activeTabId: string | null; dirtyTabs: Record<string, boolean> }) => {
     if (!state.activeTabId) return {};
     return { dirtyTabs: { ...state.dirtyTabs, [state.activeTabId]: true } };
@@ -773,8 +840,7 @@ export function extractNodesFromModel(data: ModelData | null): ModelNode[] {
         d.Nodes.forEach((node: any) => {
             // Avoid duplicates if they were already added from specific arrays
             if (!nodes.find(n => n.ObjectId === node.ObjectId)) {
-                // Try to infer type or default to Helper
-                const type = node.type || NodeType.HELPER;
+                const type = inferNodeTypeFromRawNode(node);
                 nodes.push({ ...node, type } as ModelNode);            }
         });
     }
@@ -1177,6 +1243,16 @@ function needsReorderForSave(data: any): boolean {
 
     return false;
 }
+
+const mergeNodeUpdates = (node: ModelNode, updates: Partial<ModelNode>): ModelNode => {
+    const merged = { ...node, ...updates } as ModelNode;
+    for (const prop of ['Translation', 'Rotation', 'Scaling'] as const) {
+        if (Object.prototype.hasOwnProperty.call(updates, prop) && updates[prop] == null) {
+            delete (merged as any)[prop];
+        }
+    }
+    return merged;
+};
 
 function getDefaultNodeProperties(type: NodeType): Partial<ModelNode> {
     switch (type) {
@@ -1737,12 +1813,15 @@ export const useModelStore = create<ModelState>((set, get) => ({
         const state = get();
         if (!state.modelData) return null;
 
-        let nodesForSave = sanitizeNodesArray(state.nodes);
+        let nodesForSave = restoreNodeTypesFromModelData(
+            sanitizeNodesArray(state.nodes),
+            state.modelData
+        );
         if (nodesForSave.length === 0) {
             const recovered = extractNodesFromModel(state.modelData);
             if (recovered.length > 0) {
                 console.warn('[ModelStore] getModelDataForSave recovered nodes from modelData because store.nodes was empty');
-                nodesForSave = recovered;
+                nodesForSave = restoreNodeTypesFromModelData(recovered, state.modelData);
             }
         }
 
@@ -1869,7 +1948,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             const updatedNodes = state.nodes.map((node) => {
                 if (node.ObjectId !== objectId) return node;
-                let merged = { ...node, ...updates } as ModelNode;
+                let merged = mergeNodeUpdates(node, updates);
                 // 未显式改轴心时，用全局 PivotPoints 覆盖节点副本，避免粒子等热同步把 Float32 污染成 214,168,178
                 if (!('PivotPoint' in updates)) {
                     const fromTable = pivotVec3ToTuple(
@@ -1896,7 +1975,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
         set((state) => {
             const updatedNodes = state.nodes.map((node) => {
                 if (node.ObjectId !== objectId) return node;
-                let merged = { ...node, ...updates } as ModelNode;
+                let merged = mergeNodeUpdates(node, updates);
                 if (!('PivotPoint' in updates)) {
                     const fromTable = pivotVec3ToTuple(
                         (state.modelData as any)?.PivotPoints?.[objectId]
@@ -2752,7 +2831,7 @@ export const useModelStore = create<ModelState>((set, get) => ({
                 const update = updates.find((u) => u.objectId === node.ObjectId);
                 if (!update) return node;
                 hasChanges = true;
-                let merged = { ...node, ...update.data } as ModelNode;
+                let merged = mergeNodeUpdates(node, update.data);
                 if (!('PivotPoint' in (update.data || {}))) {
                     const fromTable = pivotVec3ToTuple(
                         (state.modelData as any)?.PivotPoints?.[node.ObjectId]

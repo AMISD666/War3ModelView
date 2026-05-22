@@ -1,4 +1,6 @@
-﻿type LengthLike = {
+import { buildModelDataWithGeosetRemovalReferences } from '../../commands/geosetDeletionReferenceRemap'
+
+type LengthLike = {
     length: number
 }
 
@@ -14,6 +16,11 @@ type MutableGeoset = {
 
 type MutablePreparedModel = {
     Geosets?: MutableGeoset[]
+    GeosetAnims?: unknown[]
+    Bones?: unknown[]
+    Nodes?: unknown[]
+    Model?: unknown
+    Info?: unknown
 }
 
 const hasItems = (value: unknown): value is LengthLike =>
@@ -50,8 +57,9 @@ export const cleanupInvalidGeosets = (preparedData: MutablePreparedModel): void 
     if (!preparedData.Geosets) return
 
     const originalCount = preparedData.Geosets.length
+    const removedGeosetIndices: number[] = []
 
-    preparedData.Geosets = preparedData.Geosets.filter((geoset, index) => {
+    const nextGeosets = preparedData.Geosets.filter((geoset, index) => {
         const hasVertices = hasItems(geoset.Vertices)
         const hasFaces = hasItems(geoset.Faces)
         const hasNormals = hasItems(geoset.Normals)
@@ -63,9 +71,24 @@ export const cleanupInvalidGeosets = (preparedData: MutablePreparedModel): void 
             console.warn(
                 `[ModelSavePreparation] Removing invalid Geoset ${index}: vertices=${geoset.Vertices?.length || 0}, faces=${geoset.Faces?.length || 0}, normals=${geoset.Normals?.length || 0}, tverts=${Array.isArray(geoset.TVertices) ? geoset.TVertices.length : 0}`
             )
+            removedGeosetIndices.push(index)
         }
         return isValid
     })
+
+    if (removedGeosetIndices.length > 0) {
+        const repaired = buildModelDataWithGeosetRemovalReferences(
+            preparedData,
+            nextGeosets,
+            removedGeosetIndices
+        ) as MutablePreparedModel
+        Object.keys(preparedData as Record<string, unknown>).forEach((key) => {
+            delete (preparedData as Record<string, unknown>)[key]
+        })
+        Object.assign(preparedData, repaired)
+    } else {
+        preparedData.Geosets = nextGeosets
+    }
 
     preparedData.Geosets.forEach((geoset) => {
         if (!geoset.Anims) {
@@ -80,7 +103,7 @@ export const cleanupInvalidGeosets = (preparedData: MutablePreparedModel): void 
     })
 
     if (preparedData.Geosets.length !== originalCount) {
-        // Kept as an explicit branch for future telemetry without changing save behavior.
+        // Kept as an explicit branch for future telemetry.
     }
 }
 

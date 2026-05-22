@@ -26,6 +26,14 @@
 
 <body>
   <div id="root">
+    <script>
+      window.__war3StartupBootMarks = [{
+        mark: 'frontend.html.inline_boot_script',
+        epochMs: Date.now(),
+        perfMs: performance.now(),
+        readyState: document.readyState
+      }];
+    </script>
     <!-- Inline skeleton — visible instantly before React hydrates -->
     <div id="app-skeleton" style="
       position:fixed;inset:0;

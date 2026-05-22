@@ -21,6 +21,7 @@ const LICENSE_KEY: &str = "License";
 const MACHINE_ID_KEY: &str = "MachineId";
 const LAST_CHECK_TIME_KEY: &str = "LastCheckTime";
 const QQ_VERIFICATION_TIME_KEY: &str = "QQVerif";
+const WMI_UUID_CACHE_KEY: &str = "WmiUuidCache";
 const QQ_REVERIFY_SECONDS: i64 = 180 * 24 * 60 * 60;
 pub const BASIC_FEATURE_LEVEL: u8 = 1;
 pub const PRO_FEATURE_LEVEL: u8 = 2;
@@ -78,7 +79,49 @@ fn level_to_name(level: u8) -> String {
 // ==========================
 // Machine ID
 // ==========================
-fn get_wmi_uuid() -> Option<String> {
+fn is_placeholder_machine_id(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_uppercase();
+    let compact: String = normalized.chars().filter(|ch| *ch != '-').collect();
+
+    if !compact.is_empty()
+        && (compact.chars().all(|ch| ch == '0') || compact.chars().all(|ch| ch == 'F'))
+    {
+        return true;
+    }
+
+    normalized.contains("TO BE FILLED")
+        || normalized.contains("DEFAULT STRING")
+        || normalized.contains("SYSTEM SERIAL")
+}
+
+fn is_valid_wmi_uuid(value: &str) -> bool {
+    let trimmed = value.trim();
+    Uuid::parse_str(trimmed).is_ok() && !is_placeholder_machine_id(trimmed)
+}
+
+fn normalize_machine_id(value: &str) -> String {
+    value.trim().to_ascii_uppercase()
+}
+
+fn machine_ids_match(left: &str, right: &str) -> bool {
+    left.trim().eq_ignore_ascii_case(right.trim())
+}
+
+fn add_unique_machine_id(candidates: &mut Vec<String>, value: &str) {
+    let normalized = normalize_machine_id(value);
+    if normalized.is_empty() {
+        return;
+    }
+
+    if !candidates
+        .iter()
+        .any(|existing| machine_ids_match(existing, &normalized))
+    {
+        candidates.push(normalized);
+    }
+}
+
+fn query_wmi_uuid() -> Option<String> {
     // Execute wmic to get motherboard UUID
     let output = Command::new("cmd")
         .args(["/C", "wmic csproduct get uuid"])
@@ -91,13 +134,21 @@ fn get_wmi_uuid() -> Option<String> {
     for line in stdout.lines() {
         let trimmed = line.trim();
         if !trimmed.is_empty() && trimmed != "UUID" {
-            // Validate it looks like a UUID
-            if trimmed.len() >= 30 && trimmed.contains('-') {
-                return Some(trimmed.to_string());
+            if Uuid::parse_str(trimmed).is_ok() {
+                return Some(normalize_machine_id(trimmed));
             }
         }
     }
     None
+}
+
+fn get_wmi_uuid() -> Option<String> {
+    let uuid = query_wmi_uuid()?;
+    if is_valid_wmi_uuid(&uuid) {
+        Some(uuid)
+    } else {
+        None
+    }
 }
 
 fn get_or_create_fallback_uuid() -> Result<String, String> {
@@ -123,8 +174,6 @@ fn get_or_create_fallback_uuid() -> Result<String, String> {
     Ok(new_uuid)
 }
 
-const WMI_UUID_CACHE_KEY: &str = "WmiUuidCache";
-
 pub fn get_machine_id() -> Result<String, String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let (key, _) = hkcu
@@ -133,8 +182,8 @@ pub fn get_machine_id() -> Result<String, String> {
 
     // 1) Try cached WMI UUID (instant — no process spawn)
     if let Ok(cached) = key.get_value::<String, _>(WMI_UUID_CACHE_KEY) {
-        if !cached.is_empty() && cached.len() >= 30 && cached.contains('-') {
-            return Ok(cached);
+        if is_valid_wmi_uuid(&cached) {
+            return Ok(normalize_machine_id(&cached));
         }
     }
 
@@ -147,6 +196,33 @@ pub fn get_machine_id() -> Result<String, String> {
 
     // 3) Fallback to registry-persisted random UUID
     get_or_create_fallback_uuid()
+}
+
+fn get_legacy_machine_id_candidates() -> Vec<String> {
+    let mut candidates = Vec::new();
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+
+    if let Ok(key) = hkcu.open_subkey(REG_PATH) {
+        if let Ok(cached) = key.get_value::<String, _>(WMI_UUID_CACHE_KEY) {
+            if !is_valid_wmi_uuid(&cached) {
+                add_unique_machine_id(&mut candidates, &cached);
+            }
+        }
+    }
+
+    if let Some(raw_wmi_uuid) = query_wmi_uuid() {
+        if !is_valid_wmi_uuid(&raw_wmi_uuid) {
+            add_unique_machine_id(&mut candidates, &raw_wmi_uuid);
+        }
+    }
+
+    candidates
+}
+
+fn is_saved_license_code(license_code: &str) -> bool {
+    load_license()
+        .as_deref()
+        .is_some_and(|saved| saved == license_code)
 }
 
 // ==========================
@@ -291,7 +367,12 @@ pub fn verify_license(license_code: &str) -> Result<LicensePayload, String> {
 
     // Verify machine ID
     let current_mid = get_machine_id()?;
-    if payload.mid != current_mid {
+    let matches_current_mid = machine_ids_match(&payload.mid, &current_mid);
+    let matches_legacy_mid = is_saved_license_code(license_code)
+        && get_legacy_machine_id_candidates()
+            .iter()
+            .any(|candidate| machine_ids_match(&payload.mid, candidate));
+    if !matches_current_mid && !matches_legacy_mid {
         return Err("激活码与本机不匹配".to_string());
     }
 
@@ -601,6 +682,31 @@ mod tests {
     #[test]
     fn pro_feature_level_is_advanced_license_level() {
         assert_eq!(PRO_FEATURE_LEVEL, 2);
+    }
+
+    #[test]
+    fn placeholder_machine_ids_are_not_valid_wmi_uuids() {
+        assert!(!is_valid_wmi_uuid("FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"));
+        assert!(!is_valid_wmi_uuid("00000000-0000-0000-0000-000000000000"));
+        assert!(!is_valid_wmi_uuid("To be filled by O.E.M."));
+        assert!(is_valid_wmi_uuid("6f9619ff-8b86-d011-b42d-00cf4fc964ff"));
+    }
+
+    #[test]
+    fn machine_id_matching_ignores_case_and_padding() {
+        assert!(machine_ids_match(
+            " 6f9619ff-8b86-d011-b42d-00cf4fc964ff ",
+            "6F9619FF-8B86-D011-B42D-00CF4FC964FF"
+        ));
+    }
+
+    #[test]
+    fn unique_machine_id_candidates_are_normalized() {
+        let mut candidates = Vec::new();
+        add_unique_machine_id(&mut candidates, " ffffffff-ffff-ffff-ffff-ffffffffffff ");
+        add_unique_machine_id(&mut candidates, "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF");
+
+        assert_eq!(candidates, ["FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"]);
     }
 
     #[test]

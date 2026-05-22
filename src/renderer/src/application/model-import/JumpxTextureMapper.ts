@@ -17,12 +17,13 @@ export const chooseJumpxTexturePath = (sourceModelDir: string, value: string): s
     return relativeOrAbsolute.replace(/\.(dds|tga)$/i, '.blp')
 }
 
-const mapTextureFlags = (flags: number): number => {
-    let textureFlags = 0
-    if ((flags & TEXTURE_WRAP_WIDTH) !== 0) textureFlags |= 1
-    if ((flags & TEXTURE_WRAP_HEIGHT) !== 0) textureFlags |= 2
-    return textureFlags
-}
+const createWrappedJumpxTexture = (image: string): Texture => ({
+    Image: image,
+    ReplaceableId: 0,
+    WrapWidth: true,
+    WrapHeight: true,
+    Flags: jumpxTextureWrapFlags,
+})
 
 export const buildJumpxTextureLookup = (
     sourceModelDir: string,
@@ -34,13 +35,13 @@ export const buildJumpxTextureLookup = (
     for (const texture of scene.textures) {
         const image = chooseJumpxTexturePath(sourceModelDir, texture.path || texture.name)
         if (!image) continue
-        const flags = mapTextureFlags(texture.rawFlags | texture.saveFlags)
+        const flags = jumpxTextureWrapFlags
         const key = `${image.replace(/\\/g, '/').toLowerCase()}|${flags}|0`
         let textureId = idByTextureKey.get(key)
         if (textureId === undefined) {
             textureId = textures.length
             idByTextureKey.set(key, textureId)
-            textures.push({ Image: image, ReplaceableId: 0, Flags: flags })
+            textures.push(createWrappedJumpxTexture(image))
         }
         textureIdByJumpxIndex.set(texture.textureIndex, textureId)
     }
@@ -53,18 +54,19 @@ export const ensureJumpxTextureSlot = (
     textures: Texture[],
     textureIdByJumpxIndex: Map<number, number>,
     jumpxTextureIndex: number,
-    flags: number,
+    _flags: number,
 ): number => {
     const source = scene.textures.find((texture) => texture.textureIndex === jumpxTextureIndex)
     const image = source ? chooseJumpxTexturePath(sourceModelDir, source.path || source.name) : ''
     if (!image) return -1
+    const effectiveFlags = jumpxTextureWrapFlags
     const existing = textures.findIndex((texture) =>
         texture.Image.replace(/\\/g, '/').toLowerCase() === image.replace(/\\/g, '/').toLowerCase()
-        && (texture.Flags ?? 0) === flags
+        && (texture.Flags ?? 0) === effectiveFlags
         && (texture.ReplaceableId ?? 0) === 0)
     if (existing >= 0) return existing
     const textureId = textures.length
-    textures.push({ Image: image, ReplaceableId: 0, Flags: flags })
+    textures.push(createWrappedJumpxTexture(image))
     textureIdByJumpxIndex.set(jumpxTextureIndex, textureId)
     return textureId
 }

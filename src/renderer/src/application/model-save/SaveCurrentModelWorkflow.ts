@@ -9,7 +9,7 @@ import { saveModelUseCase } from './SaveModelUseCase'
 import type { EncodeAdjustedTexturesOptions, TextureAssetOperationResult, TextureSaveAssetService } from './TextureSaveAssetService'
 import { textureSaveAssetService } from './TextureSaveAssetService'
 import { clearTextureBatchCache } from '../cache'
-import { FBX_PRO_FEATURE_NAME, isFbxSourcePath } from '../model-import/fbxSourcePath'
+import { ADVANCED_IMPORT_FEATURE_NAME, isAdvancedImportSourcePath } from '../model-import/fbxSourcePath'
 import { requireProFeature } from '../../utils/featureGate'
 
 export type SaveValidationContext = 'save' | 'saveAs' | 'export' | 'convert'
@@ -33,7 +33,6 @@ export interface SavePreparedModelInput {
     targetPath: string
     globalColorSettings?: GlobalColorAdjustSettings
     textureOptions?: SaveWorkflowTextureOptions
-    copyReferencedTextures?: boolean
     encodeAdjustedTextures?: boolean
     format?: ModelSerializationFormat
     validationContext: SaveValidationContext
@@ -45,7 +44,6 @@ export interface SavePreparedModelResult {
     preparedData: ModelData
     savedNodes?: ModelNode[]
     textureEncodeResult: TextureAssetOperationResult
-    textureCopyResult: TextureAssetOperationResult
 }
 
 const EMPTY_TEXTURE_RESULT: TextureAssetOperationResult = {
@@ -62,7 +60,7 @@ export class SaveCurrentModelWorkflow {
     ) { }
 
     async savePreparedModel(input: SavePreparedModelInput): Promise<SavePreparedModelResult | null> {
-        if (isFbxSourcePath(input.sourceModelPath) && !(await requireProFeature(FBX_PRO_FEATURE_NAME))) {
+        if (isAdvancedImportSourcePath(input.sourceModelPath) && !(await requireProFeature(ADVANCED_IMPORT_FEATURE_NAME))) {
             return null
         }
 
@@ -84,20 +82,6 @@ export class SaveCurrentModelWorkflow {
                 return null
             }
         }
-
-        const textureCopyResult = input.copyReferencedTextures
-            ? await this.textureAssets.copyReferencedTexturesToTarget(
-                preparation.preparedData,
-                input.sourceModelPath,
-                input.targetPath,
-                {
-                    onProgress: ({ current, total, texturePath }) => input.onProgress?.({
-                        progress: 35 + (total > 0 ? (current / total) * 15 : 15),
-                        detail: texturePath ? `正在复制贴图 ${current}/${total}: ${texturePath}` : `正在复制贴图 ${current}/${total}`,
-                    }),
-                },
-            )
-            : EMPTY_TEXTURE_RESULT
 
         const textureEncodeResult = input.encodeAdjustedTextures && input.textureOptions
             ? await this.textureAssets.encodeAdjustedTexturesOnSave(
@@ -131,7 +115,6 @@ export class SaveCurrentModelWorkflow {
             preparedData: preparation.preparedData,
             savedNodes: preparation.savedNodes,
             textureEncodeResult,
-            textureCopyResult,
         }
     }
 

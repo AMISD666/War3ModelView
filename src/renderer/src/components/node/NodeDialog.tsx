@@ -149,11 +149,12 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
         translationAnim?: any
         rotationAnim?: any
         scalingAnim?: any
+        clearMissingAnimationTracks?: boolean
     }): ModelNode | null => {
         const sourceNode = getCurrentSourceNode()
         if (!sourceNode) return null
 
-        return {
+        const nextNode = {
             ...sourceNode,
             Name: values.name,
             Parent: values.parent,
@@ -168,10 +169,24 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
             BillboardedLockY: values.billboardedLockY,
             BillboardedLockZ: values.billboardedLockZ,
             CameraAnchored: values.cameraAnchored,
-            Translation: overrides?.translationAnim !== undefined ? (overrides.translationAnim || undefined) : (animationDraftRef.current.translationAnim || undefined),
-            Rotation: overrides?.rotationAnim !== undefined ? (overrides.rotationAnim || undefined) : (animationDraftRef.current.rotationAnim || undefined),
-            Scaling: overrides?.scalingAnim !== undefined ? (overrides.scalingAnim || undefined) : (animationDraftRef.current.scalingAnim || undefined),
-        }
+        } as ModelNode
+
+        const translation = overrides?.translationAnim !== undefined ? overrides.translationAnim : animationDraftRef.current.translationAnim
+        const rotation = overrides?.rotationAnim !== undefined ? overrides.rotationAnim : animationDraftRef.current.rotationAnim
+        const scaling = overrides?.scalingAnim !== undefined ? overrides.scalingAnim : animationDraftRef.current.scalingAnim
+
+        const clearMissingAnimationTracks = overrides?.clearMissingAnimationTracks === true
+        if (translation) nextNode.Translation = translation
+        else if (clearMissingAnimationTracks) (nextNode as any).Translation = null
+        else delete (nextNode as any).Translation
+        if (rotation) nextNode.Rotation = rotation
+        else if (clearMissingAnimationTracks) (nextNode as any).Rotation = null
+        else delete (nextNode as any).Rotation
+        if (scaling) nextNode.Scaling = scaling
+        else if (clearMissingAnimationTracks) (nextNode as any).Scaling = null
+        else delete (nextNode as any).Scaling
+
+        return nextNode
     }, [getCurrentSourceNode])
 
     const { schedulePreview } = useNodeEditorPreview<ModelNode>({
@@ -209,7 +224,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
                 return
             }
 
-            const updatedNode = buildUpdatedNodeFromValues(values)
+            const updatedNode = buildUpdatedNodeFromValues(values, { clearMissingAnimationTracks: true })
             if (!updatedNode) return
 
             applyCommittedNode(updatedNode, {
@@ -238,6 +253,7 @@ const NodeDialog: React.FC<NodeDialogProps> = ({
                 translationAnim: targetProp === 'Translation' ? payload.data : undefined,
                 rotationAnim: targetProp === 'Rotation' ? payload.data : undefined,
                 scalingAnim: targetProp === 'Scaling' ? payload.data : undefined,
+                clearMissingAnimationTracks: true,
             })
             if (nextNode && standaloneEmit) {
                 standaloneEmit(NODE_EDITOR_COMMANDS.applyNodeUpdate, { objectId: nodeId, node: nextNode })

@@ -1,4 +1,5 @@
 import type { OpenModelSource } from './OpenModelWorkflow'
+import { markStartupNow } from '../diagnostics/startupDiagnostics'
 
 export const MODEL_OPEN_FILES_REQUEST_EVENT = 'war3-open-model-files'
 
@@ -23,6 +24,12 @@ export function requestOpenModelFiles(request: ModelOpenFilesRequest): void {
 
     const normalizedRequest = { ...request, paths }
     getPendingQueue().push(normalizedRequest)
+    markStartupNow('frontend.model_open.request_queued', {
+        source: normalizedRequest.source ?? '',
+        pathCount: paths.length,
+        queueLength: getPendingQueue().length,
+        paths,
+    })
     window.dispatchEvent(new CustomEvent<ModelOpenFilesRequest>(MODEL_OPEN_FILES_REQUEST_EVENT, {
         detail: normalizedRequest,
     }))
@@ -30,5 +37,10 @@ export function requestOpenModelFiles(request: ModelOpenFilesRequest): void {
 
 export function consumePendingOpenModelFileRequests(): ModelOpenFilesRequest[] {
     const queue = getPendingQueue()
-    return queue.splice(0, queue.length)
+    const requests = queue.splice(0, queue.length)
+    markStartupNow('frontend.model_open.pending_queue_consumed', {
+        requestCount: requests.length,
+        pathCount: requests.reduce((count, request) => count + request.paths.length, 0),
+    })
+    return requests
 }

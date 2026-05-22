@@ -82,7 +82,7 @@ export function useNodeEditorPreview<TNode>({
     }, [flushPreview, nodeId])
 
     useEffect(() => {
-        if (!visible || !currentNodeObjectId) {
+        if (!visible || currentNodeObjectId == null) {
             allowLivePreviewRef.current = false
             return
         }

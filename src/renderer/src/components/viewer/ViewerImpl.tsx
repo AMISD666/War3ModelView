@@ -2173,8 +2173,68 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     }
   };
 
+  const hitTestGizmoAxis = (clientX: number, clientY: number, center: vec3, transformMode: string | null | undefined): GizmoAxis => {
+    if (!canvasRef.current || !transformMode) return null;
+
+    const rect = canvasRef.current.getBoundingClientRect();
+    const scaleX = canvasRef.current.width / rect.width;
+    const scaleY = canvasRef.current.height / rect.height;
+    const x = (clientX - rect.left) * scaleX;
+    const y = (clientY - rect.top) * scaleY;
+
+    const pMatrix = mat4.create();
+    const mvMatrix = mat4.create();
+
+    if (cameraRef.current) {
+      cameraRef.current.getMatrix(mvMatrix, pMatrix);
+    } else {
+      const { distance, theta, phi, target } = targetCamera.current;
+      const cx = distance * Math.sin(phi) * Math.cos(theta);
+      const cy = distance * Math.sin(phi) * Math.sin(theta);
+      const cz = distance * Math.cos(phi);
+      const cameraPos = vec3.fromValues(cx, cy, cz);
+      vec3.add(cameraPos, cameraPos, target);
+
+      mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 5000);
+      const cameraUp = vec3.fromValues(0, 0, 1);
+      mat4.lookAt(mvMatrix, cameraPos, target, cameraUp);
+    }
+
+    const ndcX = (x / canvasRef.current.width) * 2 - 1;
+    const ndcY = -((y / canvasRef.current.height) * 2 - 1);
+
+    const invProj = mat4.create();
+    const invView = mat4.create();
+    if (!mat4.invert(invProj, pMatrix) || !mat4.invert(invView, mvMatrix)) return null;
+
+    const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0);
+    const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0);
+    const rayEyeNear = vec4.create();
+    const rayEyeFar = vec4.create();
+    vec4.transformMat4(rayEyeNear, rayClipNear, invProj);
+    vec4.transformMat4(rayEyeFar, rayClipFar, invProj);
+    if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3]);
+    if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3]);
+
+    const rayWorldNear = vec4.create();
+    const rayWorldFar = vec4.create();
+    vec4.transformMat4(rayWorldNear, rayEyeNear, invView);
+    vec4.transformMat4(rayWorldFar, rayEyeFar, invView);
+
+    const rayOrigin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2]);
+    const rayTarget = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2]);
+    const rayDir = vec3.create();
+    vec3.subtract(rayDir, rayTarget, rayOrigin);
+    vec3.normalize(rayDir, rayDir);
+
+    const gizmoScale = getGizmoScale(center);
+    const gizmoOrientation = useRendererStore.getState().gizmoOrientation;
+    const gizmoBasis = getGizmoBasis(gizmoOrientation);
+    return gizmoRenderer.current.raycast(rayOrigin, rayDir, center, transformMode as any, gizmoScale, gizmoBasis);
+  };
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const { mainMode } = useSelectionStore.getState();
+    const { mainMode, transformMode } = useSelectionStore.getState();
     // Check for Gizmo interaction first
     // In geometry mode: Alt = camera rotation (allow Gizmo)
     // In animation mode: Alt = box selection (block Gizmo)
@@ -2185,6 +2245,16 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
     if (shouldIgnoreGizmoForQ) {
       // Clear hover hit so Q+click won't be stolen by gizmo drag.
       gizmoState.current.activeAxis = null;
+    }
+
+    if (e.button === 0 && !shouldBlockGizmo && rendererRef.current) {
+      const gizmoInfo = computeCurrentGizmoCenter();
+      if (gizmoInfo.count > 0 && gizmoInfo.show) {
+        const pressedAxis = hitTestGizmoAxis(e.clientX, e.clientY, gizmoInfo.center, transformMode);
+        if (pressedAxis) {
+          gizmoState.current.activeAxis = pressedAxis;
+        }
+      }
     }
 
     if (gizmoState.current.activeAxis && e.button === 0 && !shouldBlockGizmo) {
@@ -7592,77 +7662,7 @@ import type{LiveTextureAdjustPayload,TextureReloadRequest,TextureReloadScheduler
           gizmoState.current.activeAxis = null;
           return;
         }
-        const gizmoScale = getGizmoScale(center);
-
-        if (canvasRef.current) {
-          const rect = canvasRef.current.getBoundingClientRect();
-          // Convert CSS coords to canvas pixel coords
-          const scaleX = canvasRef.current.width / rect.width;
-          const scaleY = canvasRef.current.height / rect.height;
-          const x = (e.clientX - rect.left) * scaleX;
-          const y = (e.clientY - rect.top) * scaleY;
-
-          // Use the same camera matrices as render loop for accurate raycasting
-          const pMatrix = mat4.create();
-          const mvMatrix = mat4.create();
-
-          if (cameraRef.current) {
-            cameraRef.current.getMatrix(mvMatrix, pMatrix);
-          } else {
-            // Fallback
-            const { distance, theta, phi, target } = targetCamera.current;
-            const cx = distance * Math.sin(phi) * Math.cos(theta);
-            const cy = distance * Math.sin(phi) * Math.sin(theta);
-            const cz = distance * Math.cos(phi);
-            const cameraPos = vec3.fromValues(cx, cy, cz);
-            vec3.add(cameraPos, cameraPos, target);
-
-            mat4.perspective(pMatrix, Math.PI / 4, canvasRef.current.width / canvasRef.current.height, 1, 5000);
-            const cameraUp = vec3.fromValues(0, 0, 1);
-            mat4.lookAt(mvMatrix, cameraPos, target, cameraUp);
-          }
-
-          // Robust Raycasting (Perspective + Orthographic)
-          const ndcX = (x / canvasRef.current.width) * 2 - 1;
-          const ndcY = -((y / canvasRef.current.height) * 2 - 1);
-
-          const invProj = mat4.create();
-          mat4.invert(invProj, pMatrix);
-          const invView = mat4.create();
-          mat4.invert(invView, mvMatrix);
-
-          // Unproject Near and Far points
-          const rayClipNear = vec4.fromValues(ndcX, ndcY, -1.0, 1.0);
-          const rayClipFar = vec4.fromValues(ndcX, ndcY, 1.0, 1.0);
-
-          const rayEyeNear = vec4.create();
-          vec4.transformMat4(rayEyeNear, rayClipNear, invProj);
-          const rayEyeFar = vec4.create();
-          vec4.transformMat4(rayEyeFar, rayClipFar, invProj);
-
-          // Perspective Divide (Normalize W)
-          if (rayEyeNear[3] !== 0) vec4.scale(rayEyeNear, rayEyeNear, 1.0 / rayEyeNear[3]);
-          if (rayEyeFar[3] !== 0) vec4.scale(rayEyeFar, rayEyeFar, 1.0 / rayEyeFar[3]);
-
-          // Transform to World Space
-          const rayWorldNear = vec4.create();
-          vec4.transformMat4(rayWorldNear, rayEyeNear, invView);
-          const rayWorldFar = vec4.create();
-          vec4.transformMat4(rayWorldFar, rayEyeFar, invView);
-
-          const rayOrigin = vec3.fromValues(rayWorldNear[0], rayWorldNear[1], rayWorldNear[2]);
-          const rayTarget = vec3.fromValues(rayWorldFar[0], rayWorldFar[1], rayWorldFar[2]);
-
-          const rayDir = vec3.create();
-          vec3.subtract(rayDir, rayTarget, rayOrigin);
-          vec3.normalize(rayDir, rayDir);
-
-          // Pass rayOrigin as cameraPos to raycast (it serves as the ray start point)
-          const gizmoOrientation = useRendererStore.getState().gizmoOrientation;
-          const gizmoBasis = getGizmoBasis(gizmoOrientation);
-          const hit = gizmoRenderer.current.raycast(rayOrigin, rayDir, center, transformMode as any, gizmoScale, gizmoBasis);
-          gizmoState.current.activeAxis = hit;
-        }
+        gizmoState.current.activeAxis = hitTestGizmoAxis(e.clientX, e.clientY, center, transformMode);
       }
     }
   };

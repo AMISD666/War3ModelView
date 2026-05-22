@@ -9,3 +9,15 @@ export const createWar3ModelRenderer = (model: unknown): War3ModelRenderer =>
 export const addWar3GeosetBuffers = (model: unknown, geosetIndex: number): void => {
     ModelResourceManager.getInstance().addGeosetBuffers(model as War3ModelRendererModel, geosetIndex)
 }
+
+export const rebuildWar3GeosetBuffers = (renderer: War3ModelRenderer): void => {
+    const rendererWithRebuild = renderer as War3ModelRenderer & { rebuildGeosetBuffers?: () => void }
+    if (typeof rendererWithRebuild.rebuildGeosetBuffers === 'function') {
+        rendererWithRebuild.rebuildGeosetBuffers()
+        return
+    }
+
+    renderer.model?.Geosets?.forEach((_geoset, geosetIndex) => {
+        ModelResourceManager.getInstance().addGeosetBuffers(renderer.model, geosetIndex)
+    })
+}

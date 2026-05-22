@@ -7,6 +7,15 @@ use crate::jumpx_import::geometry_data::{DEFAULT_SAMPLE_FPS, DEFAULT_SAMPLE_STAR
 use crate::jumpx_import::types::{JumpxParticleDto, JumpxScalarKeyDto};
 
 const VISIBILITY_TRACK_LINE_TYPE: u32 = 0;
+const UNINITIALIZED_PRIORITY_PLANE_I32: i32 = i32::from_ne_bytes([0xcd, 0xcd, 0xcd, 0xcd]);
+
+fn normalize_priority_plane(value: i32) -> i32 {
+    if value == UNINITIALIZED_PRIORITY_PLANE_I32 {
+        0
+    } else {
+        value
+    }
+}
 
 pub(in crate::jumpx_import) fn parse_particles(
     head: &[u8],
@@ -57,7 +66,7 @@ pub(in crate::jumpx_import) fn parse_particles(
         let life_span_tail_uv_anim = read_u32x3_at(head, offset + 252)?;
         let decay_tail_uv_anim = read_u32x3_at(head, offset + 264)?;
         let texture_id = read_i32_at(head, offset + 276)?;
-        let priority_plane = read_i32_at(head, offset + 280)?;
+        let priority_plane = normalize_priority_plane(read_i32_at(head, offset + 280)?);
         let normal = [
             read_f32_at(head, offset + 284)?,
             read_f32_at(head, offset + 288)?,

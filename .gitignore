@@ -20,6 +20,10 @@ vendor/
 vendor/*
 !vendor/war3-model/
 vendor/war3-model/*
+!vendor/war3-model/mdl/
+vendor/war3-model/mdl/*
+!vendor/war3-model/mdl/generate.ts
+!vendor/war3-model/mdl/parse.ts
 !vendor/war3-model/renderer/
 vendor/war3-model/renderer/*
 !vendor/war3-model/renderer/particles.ts
@@ -68,6 +72,7 @@ scripts/*
 !scripts/check-pe2-xyquad-plane.mjs
 !scripts/check-ribbon-render-queue.mjs
 !scripts/check-mirror-save-geometry-integrity.mjs
+!scripts/check-jumpx-material-flags.mjs
 !scripts/check-renderer-node-collections.mjs
 !scripts/check-pe2-tail-rendering.mjs
 !scripts/check-retarget-mode-renderer-cache.mjs
@@ -75,6 +80,21 @@ scripts/*
 !scripts/check-jumpx-pe2-width-length.mjs
 !scripts/check-jumpx-tx268-fixture.mjs
 !scripts/check-jumpx-mesh-bind-matrix.mjs
+!scripts/check-geoset-buffer-rebuild.mjs
+!scripts/check-delete-geometry-compaction.mjs
+!scripts/check-geoset-delete-reference-remap.mjs
+!scripts/check-geoset-delete-preserves-bones.mjs
+!scripts/check-geoset-material-jump.mjs
+!scripts/check-geoset-animation-selection-preserve.mjs
+!scripts/check-node-dynamic-track-removal.mjs
+!scripts/check-keyframe-gizmo-mousedown-hit.mjs
+!scripts/check-node-preview-object-id-zero.mjs
+!scripts/check-mdl-dontinherit-list.mjs
+!scripts/check-mdl-geosetanim-color-order.mjs
+!scripts/check-mdl-pe2-segment-color-order.mjs
+!scripts/check-mdl-geoset-sequence-extents.mjs
+!scripts/check-save-export-no-texture-copy.mjs
+!scripts/check-texture-delete-remap-no-none.mjs
 local-test-scripts/
 activation/
 

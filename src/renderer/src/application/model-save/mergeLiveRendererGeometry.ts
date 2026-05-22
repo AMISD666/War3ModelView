@@ -33,7 +33,7 @@ const cloneArrayLike = <T,>(value: T): T => {
 const cloneRendererGeosetForSave = (rendererGeoset: any, documentGeoset: any): any => {
     const next = {
         ...(documentGeoset ?? {}),
-        MaterialID: rendererGeoset.MaterialID ?? documentGeoset?.MaterialID ?? 0,
+        MaterialID: documentGeoset?.MaterialID ?? rendererGeoset.MaterialID ?? 0,
         SelectionGroup: rendererGeoset.SelectionGroup ?? documentGeoset?.SelectionGroup ?? 0,
         Unselectable: rendererGeoset.Unselectable ?? documentGeoset?.Unselectable ?? false,
         Vertices: cloneArrayLike(rendererGeoset.Vertices ?? documentGeoset?.Vertices ?? []),

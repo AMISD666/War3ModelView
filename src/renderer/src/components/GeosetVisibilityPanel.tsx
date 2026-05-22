@@ -10,7 +10,11 @@ import { SetGeosetVisibilityCommand } from '../commands/SetGeosetVisibilityComma
 import { GeosetMergeDialog } from './modals/GeosetMergeDialog';
 import { LayerConfig, layerConfigToMaterialLayer } from './modals/MaterialLayerOptions';
 import { windowManager } from '../utils/WindowManager';
-import { remapGeosetAnimsAfterRemovingGeosets } from '../commands/geosetAnimRemap';
+import {
+    buildModelDataWithGeosetRemovalReferences,
+    normalizeRemovedGeosetIndices,
+    remapHiddenGeosetIdsAfterRemovingGeosets,
+} from '../commands/geosetDeletionReferenceRemap';
 import {
     getAllGeosetIndices,
     getHiddenIdsForGeosetToggle,
@@ -90,15 +94,23 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         nextGeosets: any[],
         removedGeosetIndices: number[]
     ) => {
-        modelDocumentCommandHandler.replaceGeosetListAndAnimations({
+        if (!modelData) return;
+        const sortedRemovedIndices = normalizeRemovedGeosetIndices(removedGeosetIndices);
+        const nextModelData = buildModelDataWithGeosetRemovalReferences(modelData, nextGeosets, sortedRemovedIndices);
+        modelDocumentCommandHandler.replaceDocumentSnapshot({
             name,
-            beforeGeosets: structuredClone(modelData?.Geosets || []),
-            afterGeosets: nextGeosets,
-            beforeGeosetAnims: structuredClone(modelData?.GeosetAnims || []),
-            afterGeosetAnims: remapGeosetAnimsAfterRemovingGeosets(
-                modelData?.GeosetAnims || [],
-                removedGeosetIndices
-            ),
+            before: null,
+            after: {
+                modelData: nextModelData,
+                hiddenGeosetIds: remapHiddenGeosetIdsAfterRemovingGeosets(
+                    hiddenGeosetIds,
+                    sortedRemovedIndices,
+                    nextGeosets.length
+                ),
+                selectedGeosetIndex: null,
+                selectedGeosetIndices: [],
+            },
+            applyOptions: { rendererReload: true },
         });
     };
 
@@ -212,7 +224,18 @@ export const GeosetVisibilityPanel: React.FC<GeosetVisibilityPanelProps> = ({ vi
         if (!Number.isInteger(targetIndex)) {
             return;
         }
-        useSelectionStore.getState().setPickedGeosetIndex(targetIndex);
+        const materialId = Number(modelData?.Geosets?.[targetIndex]?.MaterialID);
+        if (!Number.isInteger(materialId) || materialId < 0 || materialId >= (modelData?.Materials?.length ?? 0)) {
+            appMessage.warning('当前多边形没有有效材质');
+            setContextMenuVisible(false);
+            return;
+        }
+
+        const selectionState = useSelectionStore.getState();
+        selectionState.setPickedGeosetIndex(targetIndex);
+        selectionState.setSelectedMaterialIndex(materialId);
+        selectionState.setSelectedMaterialIndices([materialId]);
+        selectionState.setSelectedMaterialLayerIndex(0);
         try {
             await windowManager.openMaterialManager();
         } finally {

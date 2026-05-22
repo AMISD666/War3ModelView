@@ -32,7 +32,6 @@ const FILTER_MODE_NONE = 0
 const FILTER_MODE_TRANSPARENT = 1
 const FILTER_MODE_BLEND = 2
 const FILTER_MODE_ADDITIVE = 3
-const FILTER_MODE_ADD_ALPHA = 4
 
 export const createDefaultJumpxMaterial = (): Material => ({ Layers: [{ FilterMode: FILTER_MODE_NONE, TextureID: -1 }] })
 
@@ -70,11 +69,10 @@ export const getJumpxMaterialTextureFlags = (material: JumpxMaterialDto, repeatF
 
 const mapFilterMode = (flags: number): number => {
     if ((flags & RENDER_ADD) !== 0) return FILTER_MODE_ADDITIVE
-    if ((flags & RENDER_ALPHAKEY) !== 0) return FILTER_MODE_ADD_ALPHA
     // JumpX's reference renderer leaves the Modulate/Modulate2x blend funcs disabled.
     // Mapping them to War3 Modulate modes makes large translucent planes darken the scene.
     if ((flags & (RENDER_ALPHABLEND | RENDER_BLEND)) !== 0) return FILTER_MODE_BLEND
-    if ((flags & RENDER_ALPHATEST) !== 0) return FILTER_MODE_TRANSPARENT
+    if ((flags & (RENDER_ALPHATEST | RENDER_ALPHAKEY)) !== 0) return FILTER_MODE_TRANSPARENT
     return FILTER_MODE_NONE
 }
 
@@ -321,7 +319,6 @@ export const buildJumpxGeosetAnims = (
     return (geosets ?? []).map((geoset, geosetId) => {
         const material = materialByMappedIndex.get(Number(geoset.MaterialID))
         const geometry = geosetSourceGeometries[geosetId]
-        const useColor = (geometry?.geometryType ?? XGEO_NORMAL_MESH) !== XGEO_NORMAL_MESH
         const compactedColorKeys = compactColorKeys((material ? materialColorKeys(material) : []).map((key) => ({
             frame: normalizedSampleFrame(key),
             value: toWar3GeosetAnimColor([
@@ -338,6 +335,8 @@ export const buildJumpxGeosetAnims = (
                 Keys: compactedColorKeys.map((key) => ({ Frame: key.frame, Vector: new Float32Array(key.value) })),
             }
             : new Float32Array(compactedColorKeys[0]?.value ?? [1, 1, 1])
+        const useColor = (geometry?.geometryType ?? XGEO_NORMAL_MESH) !== XGEO_NORMAL_MESH
+            || compactedColorKeys.length > 0
 
         return {
             GeosetId: geosetId,

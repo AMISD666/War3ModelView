@@ -18,6 +18,7 @@ import { uiText } from '../constants/uiText'
 import { useWindowEvent } from '../hooks/useWindowEvent'
 import { SaveProgressOverlay } from './SaveProgressOverlay'
 import { requestOpenModelFiles } from '../application/model-open'
+import { markStartupNow, markStartupOnce } from '../application/diagnostics/startupDiagnostics'
 
 const MainLayoutOld = lazy(() => import('./MainLayout'))
 const NodeManagerWindow = lazy(() => import('./node/NodeManagerWindow').then((m) => ({ default: m.NodeManagerWindow })))
@@ -30,6 +31,7 @@ const { Content } = Layout
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value))
 
 export const MainLayoutNew: React.FC = () => {
+    markStartupOnce('frontend.main_layout_new.render')
     const showNodeManager = useUIStore((state) => state.showNodeManager)
     const showMpqBrowser = useUIStore((state) => state.showMpqBrowser)
     const showCreateNodeDialog = useUIStore((state) => state.showCreateNodeDialog)
@@ -120,6 +122,10 @@ export const MainLayoutNew: React.FC = () => {
         const paths = event.payload
         if (!paths || paths.length === 0) return
 
+        markStartupNow('frontend.main_layout_new.open_files_event', {
+            pathCount: paths.length,
+            paths,
+        })
         requestOpenModelFiles({
             paths,
             source: 'external-open',
@@ -129,6 +135,7 @@ export const MainLayoutNew: React.FC = () => {
     })
 
     useEffect(() => {
+        markStartupNow('frontend.main_layout_new.mounted')
         const onKeyDown = (event: KeyboardEvent) => {
             if (useSaveOperationStore.getState().current) {
                 event.preventDefault()

@@ -8,13 +8,16 @@ import { generateMDX, parseMDX } from '../vendor/war3-model/dist/war3-model.cjs'
 
 const repoRoot = path.resolve(import.meta.dirname, '..')
 const fixtureCandidates = [
+    process.argv[2] ? path.resolve(process.argv[2]) : null,
+    path.join(repoRoot, 'testmodel', 'tx_268_s06_2_01_skin1.x'),
     path.join(repoRoot, 'testmodel', 'tx_268_s04_5_01_skin2.x'),
     path.join(repoRoot, 'testmodel', 'tx_268_s04_2_01_skin2.x'),
-]
+].filter(Boolean)
 const fixturePath = fixtureCandidates.find((candidate) => fs.existsSync(candidate)) ?? fixtureCandidates[0]
 const distPath = fs.mkdtempSync(path.join(os.tmpdir(), 'war3modelview-jumpx-tx268-check-'))
 const bundlePath = path.join(distPath, 'jumpx-tx268-check-bundle.mjs')
 const verbose = process.env.JUMPX_TX268_VERBOSE === '1'
+const actionNameMappingPath = path.join(repoRoot, 'docs', 'action_name_mapping.txt')
 
 const JUMPX_FILE_HEAD = Buffer.from([
     ...Buffer.from('JUMPX V5.01     WWW.JUMPW.COM   ', 'ascii'),
@@ -51,6 +54,57 @@ const normalize = (vector) => {
 const transformJumpxVec3 = ([x, y, z]) => [-y, x, z]
 
 const referenceName = (name) => name.trim().replace(/\./g, '_')
+
+const parseActionNameMapping = () => {
+    if (!fs.existsSync(actionNameMappingPath)) {
+        return []
+    }
+    return fs.readFileSync(actionNameMappingPath, 'utf8')
+        .split(/\r?\n/)
+        .map((line) => line.trim().replace(/^\uFEFF/, '').trim())
+        .filter((line) => line && !line.startsWith('['))
+        .map((line) => {
+            const splitIndex = line.indexOf('->')
+            if (splitIndex < 0) return null
+            const pattern = line.slice(0, splitIndex).trim()
+            const target = line.slice(splitIndex + 2).trim()
+            if (!pattern || !target) return null
+            try {
+                return { matcher: new RegExp(pattern), target }
+            } catch {
+                return null
+            }
+        })
+        .filter(Boolean)
+}
+
+const applyActionNameMapping = (actions) => {
+    const rules = parseActionNameMapping()
+    if (rules.length === 0) {
+        return actions
+    }
+    const mappedBases = actions.map((action) => {
+        const rule = rules.find((candidate) => candidate.matcher.test(action.name))
+        return rule?.target ?? null
+    })
+    const baseCounts = new Map()
+    for (const base of mappedBases) {
+        if (base) baseCounts.set(base, (baseCounts.get(base) ?? 0) + 1)
+    }
+    const seenCounts = new Map()
+    return actions.map((action, index) => {
+        const base = mappedBases[index]
+        if (!base) {
+            return action
+        }
+        if ((baseCounts.get(base) ?? 0) <= 1) {
+            return { ...action, name: base }
+        }
+        const seen = (seenCounts.get(base) ?? 0) + 1
+        seenCounts.set(base, seen)
+        return { ...action, name: `${base}${seen}` }
+    })
+}
 
 const transformSourcePoint = (matrix, point) => [
     matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12],
@@ -582,6 +636,20 @@ const buildScene = () => {
         })
     }
 
+    const actions = []
+    for (let index = 0; index < (dir.get('nact') ?? 0); index += 1) {
+        const offset = (dir.get('aact') ?? 0) + index * 0x5a
+        actions.push({
+            actionIndex: index,
+            name: readFixedString(head, offset, 80),
+            startFrame: head.readInt16LE(offset + 80),
+            endFrame: head.readInt16LE(offset + 82),
+            rawFlags: head.readInt16LE(offset + 84),
+            saveFlags: 0,
+        })
+    }
+    const mappedActions = applyActionNameMapping(actions)
+
     return {
         probe: {
             ok: true,
@@ -612,7 +680,7 @@ const buildScene = () => {
         attachments: [],
         ribbons: [],
         particles,
-        actions: [],
+        actions: mappedActions,
     }
 }
 
@@ -651,6 +719,18 @@ const trackSummary = (track) => ({
     firstVector: Array.from(track?.Keys?.[0]?.Vector ?? []),
     lastVector: Array.from(track?.Keys?.at(-1)?.Vector ?? []),
 })
+
+const isAnimatedTrack = (track) => Array.isArray(track?.Keys) && track.Keys.length > 1
+
+const trackMoves = (track, epsilon = 1e-5) => {
+    if (!isAnimatedTrack(track)) return false
+    const first = track.Keys[0]?.Vector ?? []
+    const last = track.Keys.at(-1)?.Vector ?? []
+    return Array.from(first).some((value, index) => Math.abs(value - Number(last[index] ?? value)) > epsilon)
+}
+
+const getSequenceIntervalByName = (model, name) =>
+    model.Sequences?.find((sequence) => String(sequence?.Name ?? '').toLowerCase() === name)?.Interval
 
 const assertNoInventedPe2Translation = (emitter) => {
     if (emitter?.Translation !== undefined) {
@@ -722,6 +802,12 @@ const main = async () => {
     if (scene.particles.length < 4) fail(`Expected source fixture to contain several particles, got ${scene.particles.length}`)
     if ((modelData.ParticleEmitters2 ?? []).length !== scene.particles.length) fail(`Expected imported PE2 count to match the source fixture, got ${modelData.ParticleEmitters2?.length}/${scene.particles.length}`)
     if ((modelData.Textures ?? []).length < scene.textures.length) fail(`Expected imported texture slots for all source textures, got ${modelData.Textures?.length}`)
+    const unwrappedTextures = (modelData.Textures ?? []).filter((texture) =>
+        texture.ReplaceableId === 0
+        && (((texture.Flags ?? 0) & 3) !== 3 || texture.WrapWidth !== true || texture.WrapHeight !== true))
+    if (unwrappedTextures.length > 0) {
+        fail(`All JumpX imported textures must enable WrapWidth and WrapHeight, got ${JSON.stringify(unwrappedTextures.slice(0, 5))}`)
+    }
     if ((modelData.Bones ?? []).length !== scene.bones.length * 2) fail(`Expected imported render and mesh bones for the fixture, got ${modelData.Bones?.length}/${scene.bones.length}`)
     if (mappedKeys < scene.bones.length * 31 * 3) fail(`Expected mapped bone TRS keys for the fixture, got ${mappedKeys}`)
     for (const bone of modelData.Bones ?? []) {
@@ -730,9 +816,83 @@ const main = async () => {
         }
     }
 
-    const interval = modelData.Sequences?.[0]?.Interval
-    if (!interval || interval[0] !== 10667 || interval[1] < 11667) {
-        fail(`Expected sequence interval to cover tx_268 source timeMs from 10667, got ${JSON.stringify(interval)}`)
+    const isS06Fixture = /tx_268_s06_2_01_skin1\.x$/i.test(fixturePath)
+    if (isS06Fixture) {
+        const idleInterval = getSequenceIntervalByName(modelData, 'stand')
+        const deathSequence = modelData.Sequences?.find((sequence) => String(sequence?.Name ?? '').toLowerCase() === 'death')
+        const deathInterval = deathSequence?.Interval
+        if (!idleInterval || idleInterval[0] !== 10667 || idleInterval[1] !== 12667) {
+            fail(`Expected tx_268_s06 idle action to import as mapped stand at 10667..12667, got ${JSON.stringify(idleInterval)}`)
+        }
+        if (!deathInterval || deathInterval[0] !== 12833 || deathInterval[1] !== 14000) {
+            fail(`Expected tx_268_s06 dead action to import as mapped death at 12833..14000, got ${JSON.stringify(deathInterval)}`)
+        }
+        if (deathSequence.NonLooping !== true) {
+            fail('Expected tx_268_s06 mapped death sequence to be marked NonLooping')
+        }
+    } else {
+        const interval = modelData.Sequences?.[0]?.Interval
+        if (!interval || interval[0] !== 10667 || interval[1] < 11667) {
+            fail(`Expected sequence interval to cover tx_268 source timeMs from 10667, got ${JSON.stringify(interval)}`)
+        }
+    }
+
+    const textureAnims = modelData.TextureAnims ?? []
+    if (textureAnims.length === 0) {
+        fail('Expected tx_268 JumpX material samples to create TextureAnims')
+    }
+    if (!textureAnims.some((anim) => trackMoves(anim.Translation))) {
+        fail(`Expected at least one moving tx_268 TextureAnim, got ${JSON.stringify(textureAnims.map((anim) => trackSummary(anim.Translation)))}`)
+    }
+    const materialTextureAnimRefs = (modelData.Materials ?? [])
+        .map((material) => material.Layers?.[0]?.TVertexAnimId)
+        .filter((value) => value !== undefined && value !== null)
+    if (materialTextureAnimRefs.length !== (modelData.Materials ?? []).length) {
+        fail(`Expected every tx_268 material to reference a TextureAnim, got ${JSON.stringify(materialTextureAnimRefs)}`)
+    }
+    if (!materialTextureAnimRefs.every((value) => Number.isInteger(value) && value >= 0 && value < textureAnims.length)) {
+        fail(`tx_268 material TextureAnim refs are invalid: ${JSON.stringify(materialTextureAnimRefs)} of ${textureAnims.length}`)
+    }
+
+    const geosetAnims = modelData.GeosetAnims ?? []
+    if (geosetAnims.length !== (modelData.Geosets ?? []).length) {
+        fail(`Expected one GeosetAnim per tx_268 geoset, got ${geosetAnims.length}/${modelData.Geosets?.length ?? 0}`)
+    }
+    const colorTrackCount = geosetAnims.filter((anim) => isAnimatedTrack(anim.Color)).length
+    if (colorTrackCount === 0) {
+        fail(`Expected tx_268 material color samples to create animated GeosetAnim colors, got ${JSON.stringify(geosetAnims.map((anim) => trackSummary(anim.Color)))}`)
+    }
+    const animatedColorWithoutFlag = geosetAnims.find((anim) => isAnimatedTrack(anim.Color) && ((anim.Flags ?? 0) & 2) === 0)
+    if (animatedColorWithoutFlag) {
+        fail(`Animated tx_268 GeosetAnim color must set the War3 color flag, got geoset ${animatedColorWithoutFlag.GeosetId} flags=${animatedColorWithoutFlag.Flags}`)
+    }
+
+    if (isS06Fixture) {
+        const generatedMdx = generateMDX(prepareModelDataForSave(modelData))
+        const roundTripBuffer = generatedMdx instanceof ArrayBuffer
+            ? generatedMdx
+            : generatedMdx.buffer.slice(generatedMdx.byteOffset, generatedMdx.byteOffset + generatedMdx.byteLength)
+        const roundTripModel = parseMDX(roundTripBuffer)
+        const roundTripIdleInterval = getSequenceIntervalByName(roundTripModel, 'stand')
+        const roundTripDeathSequence = roundTripModel.Sequences?.find((sequence) => String(sequence?.Name ?? '').toLowerCase() === 'death')
+        const roundTripDeathInterval = roundTripDeathSequence?.Interval
+        if (!roundTripIdleInterval || roundTripIdleInterval[0] !== 10667 || roundTripIdleInterval[1] !== 12667) {
+            fail(`Round-trip MDX must keep tx_268_s06 mapped stand interval on the sampled key range, got ${JSON.stringify(roundTripIdleInterval)}`)
+        }
+        if (!roundTripDeathInterval || roundTripDeathInterval[0] !== 12833 || roundTripDeathInterval[1] !== 14000) {
+            fail(`Round-trip MDX must keep tx_268_s06 mapped death interval on the sampled key range, got ${JSON.stringify(roundTripDeathInterval)}`)
+        }
+        if (roundTripDeathSequence.NonLooping !== true) {
+            fail('Round-trip MDX must keep tx_268_s06 mapped death as NonLooping')
+        }
+        if (!roundTripModel.TextureAnims?.some((anim) => trackMoves(anim.Translation))) {
+            fail('Round-trip MDX must keep tx_268_s06 texture animation tracks')
+        }
+        if (!roundTripModel.GeosetAnims?.some((anim) => isAnimatedTrack(anim.Color) && ((anim.Flags ?? 0) & 2) !== 0)) {
+            fail('Round-trip MDX must keep tx_268_s06 animated GeosetAnim colors with the color flag')
+        }
+        console.log('JumpX tx_268_s06 material animation check passed')
+        return
     }
 
     const firstBone = modelData.Bones?.find((bone) => bone.Name === 'Bone002')

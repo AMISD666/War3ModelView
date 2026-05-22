@@ -5,6 +5,8 @@
  * in 3D geometry editing mode.
  */
 
+import { makeTypedFaceArray } from './modelOptimizationShared'
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type GeosetData = any
 
@@ -121,6 +123,16 @@ const copyStridedValues = (
     return copied
 }
 
+const getSkinWeightsStride = (
+    skinWeights: ArrayLike<number> | undefined | null,
+    vertexCount: number
+): number => {
+    if (!skinWeights || vertexCount <= 0) return 0
+    if (skinWeights.length >= vertexCount * 8) return 8
+    if (skinWeights.length >= vertexCount * 4) return 4
+    return 0
+}
+
 const compactGeosetByRemainingFaces = (
     geoset: GeosetData,
     remainingFaceIndices: number[],
@@ -159,13 +171,14 @@ const compactGeosetByRemainingFaces = (
         : []
     const newFaces = remainingFaces.map((idx) => oldToNew.get(idx)!)
     const vertexCount = Math.floor((geoset.Vertices?.length ?? 0) / 3)
+    const skinWeightsStride = getSkinWeightsStride(geoset.SkinWeights, vertexCount)
 
     return {
         updatedGeoset: {
             Vertices: new Float32Array(copyStridedValues(geoset.Vertices, sortedUsed, 3)),
             Normals: new Float32Array(copyStridedValues(geoset.Normals, sortedUsed, 3)),
             VertexGroup: createVertexGroupArray(geoset.VertexGroup, newVertexGroups),
-            Faces: new Uint16Array(newFaces),
+            Faces: makeTypedFaceArray(newFaces),
             TVertices: newTVertices,
             Groups: cloneGroups(geoset.Groups),
             TotalGroupsCount: typeof geoset.TotalGroupsCount === 'number'
@@ -180,7 +193,7 @@ const compactGeosetByRemainingFaces = (
             ...(typeof geoset.LevelOfDetail === 'number' ? { LevelOfDetail: geoset.LevelOfDetail } : {}),
             ...(typeof geoset.Name === 'string' ? { Name: geoset.Name } : {}),
             ...(geoset.Tangents ? { Tangents: new Float32Array(copyStridedValues(geoset.Tangents, sortedUsed, 4)) } : {}),
-            ...(geoset.SkinWeights ? { SkinWeights: new Uint8Array(copyStridedValues(geoset.SkinWeights, sortedUsed, 4)) } : {})
+            ...(skinWeightsStride > 0 ? { SkinWeights: new Uint8Array(copyStridedValues(geoset.SkinWeights, sortedUsed, skinWeightsStride)) } : {})
         },
         verticesRemoved: vertexCount - sortedUsed.length,
         facesRemoved: removedFaceCount
@@ -376,7 +389,7 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
             Vertices: new Float32Array(updatedVertices),
             Normals: new Float32Array(updatedNormals),
             VertexGroup: createVertexGroupArray(geoset.VertexGroup, updatedVertexGroups),
-            Faces: new Uint16Array(updatedFaces),
+            Faces: makeTypedFaceArray(updatedFaces),
             TVertices: updatedTVertices.map(tv => new Float32Array(tv)),
             MaterialID: geoset.MaterialID,
             Groups: groups,
@@ -395,7 +408,7 @@ export function splitVertices(geoset: GeosetData, vertexIndices: number[], mater
             Vertices: new Float32Array(newVertices),
             Normals: new Float32Array(newNormals),
             VertexGroup: createVertexGroupArray(geoset.VertexGroup, newVertexGroups),
-            Faces: new Uint16Array(newFaces),
+            Faces: makeTypedFaceArray(newFaces),
             TVertices: newTVertices.map(tv => new Float32Array(tv)),
             MaterialID: materialId,
             Groups: groups,

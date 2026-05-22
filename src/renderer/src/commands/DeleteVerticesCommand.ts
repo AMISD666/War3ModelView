@@ -2,7 +2,7 @@ import { Command } from '../utils/CommandManager'
 import { deleteVertices, DeleteResult } from '../utils/vertexOperations'
 import { useModelStore } from '../store/modelStore'
 import { useSelectionStore } from '../store/selectionStore'
-import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { addWar3GeosetBuffers, rebuildWar3GeosetBuffers } from '../infrastructure/render'
 import { syncRendererGeosetBuffers } from '../application/render'
 import { modelDocumentCommandHandler } from '../application/commands'
 import {
@@ -89,6 +89,8 @@ export class DeleteVerticesCommand implements Command {
 
         if (shouldRemoveGeoset) {
             this.renderer.model.Geosets.splice(this.geosetIndex, 1)
+            rebuildWar3GeosetBuffers(this.renderer)
+
             const nextGeosetAnims = remapGeosetAnimsAfterRemovingGeosets(
                 this.originalGeosetAnimsSnapshot,
                 [this.geosetIndex]
@@ -118,6 +120,7 @@ export class DeleteVerticesCommand implements Command {
 
         if (this.removedGeoset) {
             this.renderer.model.Geosets.splice(this.geosetIndex, 0, cloneGeosetSnapshot(this.originalGeosetSnapshot))
+            rebuildWar3GeosetBuffers(this.renderer)
             if (this.originalGeosetAnimsSnapshot) {
                 syncRendererGeosetAnims(this.renderer, this.originalGeosetAnimsSnapshot)
             }
@@ -126,9 +129,9 @@ export class DeleteVerticesCommand implements Command {
             if (geoset) {
                 Object.assign(geoset, cloneGeosetSnapshot(this.originalGeosetSnapshot))
             }
+            addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
         }
 
-        addWar3GeosetBuffers(this.renderer.model, this.geosetIndex)
         syncRendererGeosetBuffers(this.renderer, [this.geosetIndex], {
             vertices: true,
             normals: true,

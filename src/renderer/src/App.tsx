@@ -3,6 +3,7 @@ import StandaloneToolWindowRouter, { isStandaloneToolWindowLabel } from './compo
 import AppErrorBoundary from './components/common/AppErrorBoundary'
 import { GlobalMessageLayer } from './components/GlobalMessageLayer'
 import { desktopGateway } from './infrastructure/desktop'
+import { markStartupNow, markStartupOnce } from './application/diagnostics/startupDiagnostics'
 
 const MainLayoutNew = lazy(() => import('./components/MainLayoutNew'))
 const ActivationModal = lazy(() => import('./components/modals/ActivationModal'))
@@ -16,6 +17,7 @@ interface ActivationStatus {
 }
 
 function App(): JSX.Element {
+    markStartupOnce('frontend.app.render')
     const [isActivated, setIsActivated] = useState<boolean | null>(null)
     const [shouldMountMainLayout, setShouldMountMainLayout] = useState(false)
     const standaloneWindowLabel = useMemo(() => {
@@ -26,11 +28,15 @@ function App(): JSX.Element {
     }, [])
 
     useEffect(() => {
+        markStartupNow('frontend.app.effect_mount_layout', {
+            standaloneWindowLabel: standaloneWindowLabel ?? '',
+        })
         if (standaloneWindowLabel) {
             return
         }
 
         const mountHandle = window.requestAnimationFrame(() => {
+            markStartupNow('frontend.app.enable_main_layout')
             setShouldMountMainLayout(true)
         })
 
@@ -40,11 +46,16 @@ function App(): JSX.Element {
     }, [standaloneWindowLabel])
 
     useEffect(() => {
+        markStartupNow('frontend.app.effect_activation_check_gate', {
+            standaloneWindowLabel: standaloneWindowLabel ?? '',
+            shouldMountMainLayout,
+        })
         if (standaloneWindowLabel || !shouldMountMainLayout) {
             return
         }
 
         const runCheck = () => {
+            markStartupNow('frontend.app.activation_check_start')
             void checkActivation()
         }
 
@@ -69,8 +80,15 @@ function App(): JSX.Element {
     const checkActivation = async () => {
         try {
             const status = await desktopGateway.invoke<ActivationStatus>('get_activation_status')
+            markStartupNow('frontend.app.activation_check_done', {
+                isActivated: status.is_activated,
+                licenseType: status.license_type,
+            })
             setIsActivated(status.is_activated)
         } catch (e: any) {
+            markStartupNow('frontend.app.activation_check_failed', {
+                error: e instanceof Error ? e.message : String(e),
+            })
             console.error('Activation check failed:', e)
             setIsActivated(false)
         }

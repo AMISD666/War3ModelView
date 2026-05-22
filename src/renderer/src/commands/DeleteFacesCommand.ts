@@ -1,4 +1,4 @@
-import { addWar3GeosetBuffers } from '../infrastructure/render'
+import { addWar3GeosetBuffers, rebuildWar3GeosetBuffers } from '../infrastructure/render'
 import { syncRendererGeosetBuffers } from '../application/render'
 import { modelDocumentCommandHandler } from '../application/commands'
 import { useModelStore } from '../store/modelStore'
@@ -109,6 +109,8 @@ export class DeleteFacesCommand implements Command {
         }
 
         if (removedGeosetIndices.length > 0) {
+            rebuildWar3GeosetBuffers(this.renderer)
+
             const nextGeosetAnims = remapGeosetAnimsAfterRemovingGeosets(
                 this.originalGeosetAnimsSnapshot,
                 removedGeosetIndices
@@ -125,8 +127,8 @@ export class DeleteFacesCommand implements Command {
         if (!this.originalGeosetsSnapshot) return
 
         this.renderer.model.Geosets = this.originalGeosetsSnapshot.map((geoset) => cloneDeep(geoset))
+        rebuildWar3GeosetBuffers(this.renderer)
         this.renderer.model.Geosets.forEach((_geoset: any, index: number) => {
-            addWar3GeosetBuffers(this.renderer.model, index)
             syncRendererGeosetBuffers(this.renderer, [index], {
                 vertices: true,
                 normals: true,

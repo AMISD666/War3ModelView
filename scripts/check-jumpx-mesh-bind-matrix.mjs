@@ -495,10 +495,13 @@ const sourceAnimatedMatrix = (bone, keyIndex) => {
     return composeTrs(translation, rotation, scale)
 }
 
-const importedAnimatedMatrix = (bone, keyIndex) => {
-    const translation = Array.from(bone.Translation?.Keys?.[keyIndex]?.Vector ?? [0, 0, 0])
-    const rotation = Array.from(bone.Rotation?.Keys?.[keyIndex]?.Vector ?? [0, 0, 0, 1])
-    const scale = Array.from(bone.Scaling?.Keys?.[keyIndex]?.Vector ?? [1, 1, 1])
+const importedKeyVectorAtFrame = (track, frame, fallback) =>
+    Array.from(track?.Keys?.find((key) => key.Frame === frame)?.Vector ?? fallback)
+
+const importedAnimatedMatrix = (bone, frame) => {
+    const translation = importedKeyVectorAtFrame(bone.Translation, frame, [0, 0, 0])
+    const rotation = importedKeyVectorAtFrame(bone.Rotation, frame, [0, 0, 0, 1])
+    const scale = importedKeyVectorAtFrame(bone.Scaling, frame, [1, 1, 1])
     return composeTrs(translation, rotation, scale)
 }
 
@@ -573,7 +576,8 @@ const calculateRmsForGeoset = (scene, modelData, geosetIndex, keyIndex) => {
     assertMeshNodeShape(meshNode, `geoset ${geosetIndex} mesh node`)
 
     const sourceFinalMatrix = multiplyMat4(transformJumpxMat4(sourceAnimatedMatrix(sourceBone, keyIndex)), transformJumpxMat4(sourceGeometry.inverseBindMatrix))
-    const importedMatrix = importedAnimatedMatrix(meshNode, keyIndex)
+    const importedFrame = sourceBone.positionKeys[keyIndex]?.timeMs ?? sourceBone.positionKeys[keyIndex]?.frame
+    const importedMatrix = importedAnimatedMatrix(meshNode, Math.round(importedFrame))
     const importedVertices = geosetVertices(importedGeoset)
     if (importedVertices.length !== sourceGeometry.vertices.length) {
         fail(`geoset ${geosetIndex} vertex array length mismatch: imported=${importedVertices.length} source=${sourceGeometry.vertices.length}`)
@@ -593,6 +597,38 @@ const calculateRmsForGeoset = (scene, modelData, geosetIndex, keyIndex) => {
             importedVertices[index + 2],
         ]
         const expected = transformPoint(sourceFinalMatrix, transformJumpxPoint(sourceVertex))
+        const actual = transformPoint(importedMatrix, importedVertex)
+        for (let axis = 0; axis < 3; axis += 1) {
+            const delta = actual[axis] - expected[axis]
+            sumSquares += delta * delta
+            count += 1
+        }
+    }
+    return Math.sqrt(sumSquares / Math.max(1, count))
+}
+
+const calculateStaticBindPoseRmsForGeoset = (scene, modelData, geosetIndex) => {
+    const sourceGeometry = scene.geometries[geosetIndex]
+    const importedGeoset = modelData.Geosets?.[geosetIndex]
+    const group = importedGeoset?.Groups?.[0] ?? []
+    const meshNode = modelData.Bones?.find((bone) => bone.ObjectId === group[0])
+    assertMeshNodeShape(meshNode, `geoset ${geosetIndex} mesh node`)
+    const importedMatrix = importedAnimatedMatrix(meshNode, 0)
+    const importedVertices = geosetVertices(importedGeoset)
+    let sumSquares = 0
+    let count = 0
+    for (let index = 0; index + 2 < sourceGeometry.vertices.length; index += 3) {
+        const sourceVertex = [
+            sourceGeometry.vertices[index],
+            sourceGeometry.vertices[index + 1],
+            sourceGeometry.vertices[index + 2],
+        ]
+        const importedVertex = [
+            importedVertices[index],
+            importedVertices[index + 1],
+            importedVertices[index + 2],
+        ]
+        const expected = transformJumpxPoint(sourceVertex)
         const actual = transformPoint(importedMatrix, importedVertex)
         for (let axis = 0; axis < 3; axis += 1) {
             const delta = actual[axis] - expected[axis]
@@ -660,6 +696,11 @@ const main = async () => {
             if (rms > RMS_EPSILON) {
                 fail(`geoset ${geosetIndex} key ${keyIndex} mesh bind RMS too high: ${rms}`)
             }
+        }
+        const staticRms = calculateStaticBindPoseRmsForGeoset(scene, modelData, geosetIndex)
+        rmsLines.push(`geo${geosetIndex}@static=${staticRms.toExponential(3)}`)
+        if (staticRms > RMS_EPSILON) {
+            fail(`geoset ${geosetIndex} static bind-pose RMS too high: ${staticRms}`)
         }
     }
 
