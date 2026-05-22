@@ -32,6 +32,20 @@ const rotateVec3 = (rotation, vector) => {
     return Array.from(out)
 }
 
+const transformJumpxVec3 = ([x, y, z]) => [-y, x, z]
+
+const transformSourcePoint = (matrix, point) => [
+    matrix[0] * point[0] + matrix[4] * point[1] + matrix[8] * point[2] + matrix[12],
+    matrix[1] * point[0] + matrix[5] * point[1] + matrix[9] * point[2] + matrix[13],
+    matrix[2] * point[0] + matrix[6] * point[1] + matrix[10] * point[2] + matrix[14],
+]
+
+const transformSourceVector = (matrix, vector) => [
+    matrix[0] * vector[0] + matrix[4] * vector[1] + matrix[8] * vector[2],
+    matrix[1] * vector[0] + matrix[5] * vector[1] + matrix[9] * vector[2],
+    matrix[2] * vector[0] + matrix[6] * vector[1] + matrix[10] * vector[2],
+]
+
 const buildImportBundle = async () => {
     fs.mkdirSync(distPath, { recursive: true })
     await esbuild.build({
@@ -172,6 +186,48 @@ const main = async () => {
     if (directional.Translation !== undefined) {
         fail(`JumpX PE2 should not invent an all-zero Translation track: ${JSON.stringify(directional.Translation)}`)
     }
+
+    const parentInverseBindMatrix = [
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 4.865242, -5.121513, 1,
+    ]
+    const bindSpaceParticle = makeParticle('part.parent_bind_space', 1, 1, 1, 1, {
+        parentBoneId: 4,
+        pivot: [0, -4.865242, 5.121513],
+        normal: [0, 1, 0],
+        xAxis: [31.381552, 0, 0],
+        yAxis: [0, 0, -31.381554],
+    })
+    const localEmitter = mapJumpxParticlesToParticleEmitter2(
+        [bindSpaceParticle],
+        40,
+        { defaultObjectId: 0, objectIdByBoneId: new Map([[4, 4]]) },
+        new Map([[0, 0]]),
+        [],
+        [{
+            boneIndex: 4,
+            name: 'Bone051diandian',
+            parentId: -1,
+            worldTranslation: [0, -4.865242, 5.121513],
+            localTranslation: null,
+            inverseBindMatrix: parentInverseBindMatrix,
+            bindMatrix: null,
+            rawFlags: 1,
+            saveFlags: 0,
+            positionKeys: [],
+            rotationKeys: [],
+            scaleKeys: [],
+            visibilityKeys: [],
+        }],
+    )[0]
+    vectorClose(localEmitter.PivotPoint, [0, 0, 0], 'JumpX PE2 pivot should be parent-local after inverse bind')
+    vectorClose(
+        rotateVec3(Array.from(localEmitter.Rotation.Keys[0].Vector), [0, 0, 1]),
+        transformJumpxVec3(transformSourceVector(parentInverseBindMatrix, bindSpaceParticle.normal)),
+        'JumpX PE2 emission direction should use parent inverse-bind vector basis',
+    )
     console.log('JumpX PE2 width/length mapping check passed')
 }
 

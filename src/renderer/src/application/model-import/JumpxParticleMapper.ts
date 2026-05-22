@@ -1,5 +1,5 @@
 import { mat3, quat, vec3 } from 'gl-matrix'
-import type { JumpxImportDiagnostic, JumpxParticleDto } from '../../types/jumpxImport'
+import type { JumpxBoneDto, JumpxImportDiagnostic, JumpxParticleDto } from '../../types/jumpxImport'
 import { NodeType, type ModelNode, type ParticleEmitter2Node } from '../../types/node'
 import type { JumpxNodeMapping } from './JumpxNodeMapper'
 import { transformJumpxVec3 } from './JumpxCoordinateTransform'
@@ -178,21 +178,69 @@ const mapParent = (particle: JumpxParticleDto, nodeMapping: JumpxNodeMapping): n
 
 const referenceName = (name: string): string => name.trim().replace(/\./g, '_')
 
-const particleSourceVec3 = (
-    particle: JumpxParticleDto,
-    value: [number, number, number],
-): [number, number, number] => {
-    if ((particle.particleFlags & JUMPX_MODEL_SPACE) === 0) {
-        return value
-    }
-    return [value[0], -value[1], value[2]]
+const getMatrixValue = (matrix: ArrayLike<number> | undefined, index: number): number => {
+    const value = Number(matrix?.[index])
+    return Number.isFinite(value) ? value : (index % 5 === 0 ? 1 : 0)
 }
 
-const particleVec3 = (particle: JumpxParticleDto, value: [number, number, number]): [number, number, number] =>
-    transformJumpxVec3(particleSourceVec3(particle, value))
+const transformSourcePoint = (
+    matrix: ArrayLike<number> | undefined,
+    point: [number, number, number],
+): [number, number, number] => [
+    getMatrixValue(matrix, 0) * point[0]
+        + getMatrixValue(matrix, 4) * point[1]
+        + getMatrixValue(matrix, 8) * point[2]
+        + getMatrixValue(matrix, 12),
+    getMatrixValue(matrix, 1) * point[0]
+        + getMatrixValue(matrix, 5) * point[1]
+        + getMatrixValue(matrix, 9) * point[2]
+        + getMatrixValue(matrix, 13),
+    getMatrixValue(matrix, 2) * point[0]
+        + getMatrixValue(matrix, 6) * point[1]
+        + getMatrixValue(matrix, 10) * point[2]
+        + getMatrixValue(matrix, 14),
+]
 
-const particlePivotPoint = (particle: JumpxParticleDto): [number, number, number] =>
-    particleVec3(particle, particle.pivot)
+const transformSourceVector = (
+    matrix: ArrayLike<number> | undefined,
+    vector: [number, number, number],
+): [number, number, number] => [
+    getMatrixValue(matrix, 0) * vector[0]
+        + getMatrixValue(matrix, 4) * vector[1]
+        + getMatrixValue(matrix, 8) * vector[2],
+    getMatrixValue(matrix, 1) * vector[0]
+        + getMatrixValue(matrix, 5) * vector[1]
+        + getMatrixValue(matrix, 9) * vector[2],
+    getMatrixValue(matrix, 2) * vector[0]
+        + getMatrixValue(matrix, 6) * vector[1]
+        + getMatrixValue(matrix, 10) * vector[2],
+]
+
+const sourceParentInverseBindMatrix = (
+    particle: JumpxParticleDto,
+    bonesByIndex: Map<number, JumpxBoneDto>,
+): ArrayLike<number> | undefined =>
+    bonesByIndex.get(particle.parentBoneId)?.inverseBindMatrix
+
+const particlePoint = (
+    particle: JumpxParticleDto,
+    value: [number, number, number],
+    bonesByIndex: Map<number, JumpxBoneDto>,
+): [number, number, number] =>
+    transformJumpxVec3(transformSourcePoint(sourceParentInverseBindMatrix(particle, bonesByIndex), value))
+
+const particleVector = (
+    particle: JumpxParticleDto,
+    value: [number, number, number],
+    bonesByIndex: Map<number, JumpxBoneDto>,
+): [number, number, number] =>
+    transformJumpxVec3(transformSourceVector(sourceParentInverseBindMatrix(particle, bonesByIndex), value))
+
+const particlePivotPoint = (
+    particle: JumpxParticleDto,
+    bonesByIndex: Map<number, JumpxBoneDto>,
+): [number, number, number] =>
+    particlePoint(particle, particle.pivot, bonesByIndex)
 
 const normalizedGlVec3 = (value: [number, number, number]): vec3 | null => {
     const result = vec3.fromValues(value[0], value[1], value[2])
@@ -239,10 +287,13 @@ const basisRotation = (
     return [result[0], result[1], result[2], result[3]]
 }
 
-const particleEmitterRotation = (particle: JumpxParticleDto): [number, number, number, number] => {
-    const normal = normalizedGlVec3(particleVec3(particle, particle.normal)) ?? vec3.clone(DEFAULT_BASIS_Z)
-    const widthAxis = normalizedGlVec3(particleVec3(particle, particle.xAxis)) ?? vec3.clone(DEFAULT_BASIS_X)
-    const heightAxis = normalizedGlVec3(particleVec3(particle, particle.yAxis)) ?? vec3.clone(DEFAULT_BASIS_Y)
+const particleEmitterRotation = (
+    particle: JumpxParticleDto,
+    bonesByIndex: Map<number, JumpxBoneDto>,
+): [number, number, number, number] => {
+    const normal = normalizedGlVec3(particleVector(particle, particle.normal, bonesByIndex)) ?? vec3.clone(DEFAULT_BASIS_Z)
+    const widthAxis = normalizedGlVec3(particleVector(particle, particle.xAxis, bonesByIndex)) ?? vec3.clone(DEFAULT_BASIS_X)
+    const heightAxis = normalizedGlVec3(particleVector(particle, particle.yAxis, bonesByIndex)) ?? vec3.clone(DEFAULT_BASIS_Y)
 
     const localX = vec3.clone(heightAxis)
     removeAxisComponent(localX, normal)
@@ -300,6 +351,7 @@ const firstTrackFrame = (...tracks: Array<War3ScalarTrack | undefined>): number 
 const particleRotationTrack = (
     particle: JumpxParticleDto,
     firstAnimationFrame: number,
+    bonesByIndex: Map<number, JumpxBoneDto>,
 ): War3QuatTrack => {
     const name = referenceName(particle.name)
     if (name === 'part_8huaban') {
@@ -309,7 +361,7 @@ const particleRotationTrack = (
             { frame: firstAnimationFrame, vector: [0, 0.714142, 0, 0.700001] },
         ])
     }
-    return buildStaticQuatTrack(firstAnimationFrame, particleEmitterRotation(particle))
+    return buildStaticQuatTrack(firstAnimationFrame, particleEmitterRotation(particle, bonesByIndex))
 }
 
 const uvSequenceCellCount = (particle: JumpxParticleDto): number => {
@@ -355,6 +407,7 @@ export const mapJumpxParticlesToParticleEmitter2 = (
     nodeMapping: JumpxNodeMapping,
     textureIdByJumpxIndex: Map<number, number>,
     diagnostics: JumpxImportDiagnostic[],
+    bones: JumpxBoneDto[] = [],
 ): ModelNode[] => [...particles]
     .sort((a, b) => {
         const aOrder = REFERENCE_ORDER_BY_PARTICLE_NAME[a.name.trim()] ?? a.particleIndex
@@ -377,12 +430,13 @@ export const mapJumpxParticlesToParticleEmitter2 = (
     const emissionRate = mapScalarTrack(particle.emissionRateKeys, (value) => value)
     const referenceTextureId = REFERENCE_TEXTURE_BY_PARTICLE_NAME[particle.name.trim()]
     const firstAnimationFrame = firstTrackFrame(visibility, emissionRate)
+    const bonesByIndex = new Map(bones.map((bone) => [bone.boneIndex, bone]))
     return {
         type: NodeType.PARTICLE_EMITTER_2,
         Name: referenceName(particle.name) || `JumpX_Particle_${particle.particleIndex}`,
         ObjectId: firstObjectId + index,
         Parent: mapParent(particle, nodeMapping),
-        PivotPoint: particlePivotPoint(particle),
+        PivotPoint: particlePivotPoint(particle, bonesByIndex),
         Flags: flags,
         EmissionRate: emissionRate ?? finite(particle.emissionRate, 0),
         Speed: finite(particle.speed, 0),
@@ -421,6 +475,6 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         Tail: tail,
         FrameFlags: (head ? 1 : 0) | (tail ? 2 : 0),
         Visibility: visibility,
-        Rotation: particleRotationTrack(particle, firstAnimationFrame),
+        Rotation: particleRotationTrack(particle, firstAnimationFrame, bonesByIndex),
     }
 })

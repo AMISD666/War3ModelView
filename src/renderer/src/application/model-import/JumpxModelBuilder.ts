@@ -176,6 +176,7 @@ export const buildJumpxStaticModelData = (
         nodeMapping,
         textureLookup.textureIdByJumpxIndex,
         diagnostics,
+        scene.bones,
     )
     modelData.Nodes = [...modelData.Nodes, ...modelData.ParticleEmitters2]
     for (const emitter of modelData.ParticleEmitters2) {
