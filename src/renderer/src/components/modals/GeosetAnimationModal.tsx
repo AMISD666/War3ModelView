@@ -6,16 +6,26 @@ import { ColorPicker } from '@renderer/components/common/EnhancedColorPicker'
 import { DraggableModal } from '../DraggableModal';
 import { useModelStore } from '../../store/modelStore'
 import { useSelectionStore } from '../../store/selectionStore'
-import { PlusOutlined, EditOutlined, DeleteOutlined, CloseOutlined } from '@ant-design/icons'
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons'
 import { StandaloneWindowFrame } from '../common/StandaloneWindowFrame'
 import { useRpcClient } from '../../hooks/useRpc'
 import { useWindowEvent } from '../../hooks/useWindowEvent'
 import { windowManager } from '../../utils/WindowManager'
-import { coercePivotFloat3 } from '../../utils/pivotUtils'
-import { vectorToPlainArray } from '../../utils/animVectorIpc'
-import { toFloat32Array } from '../../utils/modelUtils'
 import { modelDocumentCommandHandler } from '../../application/commands'
 import { createUpdateGeosetAnimsPayload } from '../../application/window-bridge/GeosetAnimationCommandPayload'
+import {
+    geosetAnimDropsShadow,
+    geosetAnimUsesColor,
+    setGeosetAnimColorEnabled,
+    setGeosetAnimDropShadowEnabled,
+} from '../../application/geoset-animation/geosetAnimationFlags'
+import {
+    cloneGeosetAnimForEditor,
+    getGeosetAnimEditorAlpha,
+    getGeosetAnimEditorColor,
+    isGeosetAnimDynamic,
+    readGeosetAnimColorVector,
+} from '../../application/geoset-animation/geosetAnimationValues'
 
 const { Text } = Typography
 const { Option } = Select
@@ -65,35 +75,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         desiredSelectedIndexRef.current = nextIndex
         setSelectedIndex(nextIndex)
     }
-    const cloneAnimVector = (animVector: any, size: number) => {
-
-        if (!animVector || typeof animVector !== 'object') return animVector
-        const toArray = (val: any): number[] => {
-            const values = vectorToPlainArray(val).slice(0, size)
-            if (values.length >= size) {
-                return values
-            }
-            if (values.length > 0) {
-                return [...values, ...new Array(size - values.length).fill(0)]
-            }
-            return new Array(size).fill(0)
-        }
-        const keys = (animVector.Keys || []).map((k: any) => ({
-            Frame: typeof k.Frame === 'number' ? k.Frame : (k.Time ?? 0),
-            Vector: toArray(k.Vector),
-            InTan: toArray(k.InTan),
-            OutTan: toArray(k.OutTan)
-        }))
-        return {
-            LineType: typeof animVector.LineType === 'number' ? animVector.LineType : 0,
-            GlobalSeqId: animVector.GlobalSeqId ?? null,
-            Keys: keys
-        }
-    }
-
-    // Keyframe Editor State
     const [editingField, setEditingField] = useState<string | null>(null)
-    const [editingVectorSize, setEditingVectorSize] = useState(1)
 
     // Initialize local state when modal opens（仅当 RPC/模型数据内容真的变化时重建，避免周期性同步打断编辑）
     useEffect(() => {
@@ -115,30 +97,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         lastAnimGeoSigRef.current = sig
 
         if (currentAnims) {
-            // Deep clone GeosetAnims, converting Float32Array to regular arrays
-            const clonedAnims = (currentAnims || []).map((anim: any) => {
-                const cloned: any = { ...anim }
-                // 静态色：Float32Array / Uint8Array(msgpack) 用 coerce；勿对 12 字节 Uint8Array 只取前三个「字节」当 RGB
-                if (anim.Color instanceof Float32Array || ArrayBuffer.isView(anim.Color)) {
-                    const c = coercePivotFloat3(anim.Color as Float32Array | Uint8Array | number[])
-                    cloned.Color = c ? [c[0], c[1], c[2]] : [1, 1, 1]
-                } else if (Array.isArray(anim.Color)) {
-                    cloned.Color = [...anim.Color]
-                } else if (anim.Color && typeof anim.Color === 'object' && Array.isArray((anim.Color as any).Keys)) {
-                    cloned.Color = cloneAnimVector(anim.Color, 3)
-                } else if (anim.Color && typeof anim.Color === 'object') {
-                    const c = coercePivotFloat3(anim.Color as Float32Array | Uint8Array | number[])
-                    const t = c ?? toFloat32Array(anim.Color, 3)
-                    cloned.Color = [t[0], t[1], t[2]]
-                }
-                // Clone Alpha if it's an AnimVector
-                if (anim.Alpha && typeof anim.Alpha === 'object' && 'Keys' in anim.Alpha) {
-                    cloned.Alpha = cloneAnimVector(anim.Alpha, 1)
-                } else if (typeof anim.Alpha === 'string') {
-                    cloned.Alpha = parseFloat(anim.Alpha)
-                }
-                return cloned
-            })
+            const clonedAnims = (currentAnims || []).map(cloneGeosetAnimForEditor)
             setLocalAnims(clonedAnims)
             setGeosets(currentGeosets || [])
             restoreSelectedIndex(clonedAnims.length)
@@ -228,14 +187,14 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         updateLocalAnim(selectedIndex, { GeosetId: val })
     }
 
-    const handleUseColorChange = (e: any) => {
+    const handleUseColorChange = (checked: boolean) => {
         if (selectedIndex < 0) return
-        updateLocalAnim(selectedIndex, { UseColor: e.target.checked })
+        updateLocalAnim(selectedIndex, setGeosetAnimColorEnabled(localAnims[selectedIndex], checked))
     }
 
-    const handleDropShadowChange = (e: any) => {
+    const handleDropShadowChange = (checked: boolean) => {
         if (selectedIndex < 0) return
-        updateLocalAnim(selectedIndex, { DropShadow: e.target.checked })
+        updateLocalAnim(selectedIndex, setGeosetAnimDropShadowEnabled(localAnims[selectedIndex], checked))
     }
 
     const handleDeleteAnim = (index: number) => {
@@ -249,34 +208,6 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
         }
     }
 
-    const isDynamic = (prop: any) => {
-        return prop && typeof prop === 'object' && !Array.isArray(prop) && !(prop instanceof Float32Array) && 'Keys' in prop
-    }
-
-    const getColor = (anim: any) => {
-        if (!anim || anim.Color == null) return '#ffffff'
-        const colorData = anim.Color
-        if (ArrayBuffer.isView(colorData)) {
-            const c = coercePivotFloat3(colorData as Float32Array | Uint8Array | number[])
-            if (c) {
-                return `rgb(${Math.round(c[0] * 255)}, ${Math.round(c[1] * 255)}, ${Math.round(c[2] * 255)})`
-            }
-        }
-        if (Array.isArray(colorData) && colorData.length >= 3) {
-            const r = Number(colorData[0]) || 0
-            const g = Number(colorData[1]) || 0
-            const b = Number(colorData[2]) || 0
-            return `rgb(${Math.round(r * 255)}, ${Math.round(g * 255)}, ${Math.round(b * 255)})`
-        }
-        return '#ffffff'
-    }
-
-    const getAlpha = (anim: any) => {
-        if (!anim) return 1
-        if (typeof anim.Alpha === 'number') return anim.Alpha
-        return 1
-    }
-
     // Animation toggle handlers
     const handleColorAnimToggle = (checked: boolean) => {
         if (selectedIndex < 0) return
@@ -284,14 +215,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
 
         if (checked) {
             // Convert static color to AnimVector
-            const currentColor = anim.Color ?? [1, 1, 1]
-            let colorArr: number[] = [1, 1, 1]
-            if (Array.isArray(currentColor)) {
-                colorArr = [Number(currentColor[0]), Number(currentColor[1]), Number(currentColor[2])]
-            } else if (currentColor instanceof Float32Array || ArrayBuffer.isView(currentColor)) {
-                const c = coercePivotFloat3(currentColor as Float32Array | Uint8Array | number[])
-                if (c) colorArr = [c[0], c[1], c[2]]
-            }
+            const colorArr = readGeosetAnimColorVector(anim.Color ?? [1, 1, 1])
             const animVector = {
                 Keys: [{ Frame: 0, Vector: colorArr }],
                 LineType: 1,
@@ -304,12 +228,7 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             let staticColor: number[] = [1, 1, 1]
             if (currentColor && currentColor.Keys && currentColor.Keys.length > 0) {
                 const v = currentColor.Keys[0].Vector
-                if (ArrayBuffer.isView(v)) {
-                    const c = coercePivotFloat3(v as Float32Array | Uint8Array | number[])
-                    staticColor = c ? [c[0], c[1], c[2]] : [1, 1, 1]
-                } else if (Array.isArray(v)) {
-                    staticColor = [Number(v[0]), Number(v[1]), Number(v[2])]
-                }
+                staticColor = readGeosetAnimColorVector(v)
             }
             updateLocalAnim(selectedIndex, { Color: staticColor })
         }
@@ -349,7 +268,6 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
     // Open keyframe editor
     const openKeyframeEditor = (field: string, vectorSize: number) => {
         setEditingField(field)
-        setEditingVectorSize(vectorSize)
 
         if (isStandalone) {
             const targetAnim = localAnims[selectedIndex];
@@ -369,12 +287,6 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
             void windowManager.openKeyframeToolWindow(windowId, payload.title, 600, 480, payload);
             // Legacy inline route, which we obsolete now but just in case
             console.warn("GeosetAnimationModal inline KeyframeEditor is obsolete. Use standalone");
-        }
-    }
-
-    const handleKeyframeSave = (animVector: any) => {
-        if (editingField && selectedIndex >= 0) {
-            updateLocalAnim(selectedIndex, { [editingField]: animVector })
         }
     }
 
@@ -460,13 +372,13 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                 >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                                         <Checkbox
-                                            checked={isDynamic(selectedAnim.Color)}
+                                            checked={isGeosetAnimDynamic(selectedAnim.Color)}
                                             onChange={(e) => handleColorAnimToggle(e.target.checked)}
                                             style={{ color: '#e8e8e8' }}
                                         >
                                             <span style={{ color: '#e8e8e8' }}>动态化</span>
                                         </Checkbox>
-                                        {isDynamic(selectedAnim.Color) && (
+                                        {isGeosetAnimDynamic(selectedAnim.Color) && (
                                             <Button
                                                 type="link"
                                                 icon={<EditOutlined />}
@@ -477,11 +389,11 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                             </Button>
                                         )}
                                     </div>
-                                    {!isDynamic(selectedAnim.Color) && (
+                                    {!isGeosetAnimDynamic(selectedAnim.Color) && (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <span style={{ color: '#b0b0b0', fontSize: '12px' }}>颜色:</span>
                                             <ColorPicker
-                                                value={getColor(selectedAnim)}
+                                                value={getGeosetAnimEditorColor(selectedAnim)}
                                                 onChange={(color) => handleColorChange(color, false)}
                                                 onChangeComplete={(color) => handleColorChange(color, true)}
                                                 placement="rightTop"
@@ -500,13 +412,13 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                 >
                                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                                         <Checkbox
-                                            checked={isDynamic(selectedAnim.Alpha)}
+                                            checked={isGeosetAnimDynamic(selectedAnim.Alpha)}
                                             onChange={(e) => handleAlphaAnimToggle(e.target.checked)}
                                             style={{ color: '#e8e8e8' }}
                                         >
                                             <span style={{ color: '#e8e8e8' }}>动态化</span>
                                         </Checkbox>
-                                        {isDynamic(selectedAnim.Alpha) && (
+                                        {isGeosetAnimDynamic(selectedAnim.Alpha) && (
                                             <Button
                                                 type="link"
                                                 icon={<EditOutlined />}
@@ -517,11 +429,11 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                             </Button>
                                         )}
                                     </div>
-                                    {!isDynamic(selectedAnim.Alpha) && (
+                                    {!isGeosetAnimDynamic(selectedAnim.Alpha) && (
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                             <span style={{ color: '#b0b0b0', fontSize: '12px' }}>透明度:</span>
                                             <InputNumber
-                                                value={getAlpha(selectedAnim)}
+                                                value={getGeosetAnimEditorAlpha(selectedAnim)}
                                                 onChange={handleAlphaChange}
                                                 step={0.1}
                                                 min={0}
@@ -558,15 +470,15 @@ const GeosetAnimationModal: React.FC<GeosetAnimationModalProps> = ({ visible, on
                                 </div>
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
                                     <Checkbox
-                                        checked={selectedAnim.UseColor === undefined ? true : selectedAnim.UseColor}
-                                        onChange={handleUseColorChange}
+                                        checked={geosetAnimUsesColor(selectedAnim)}
+                                        onChange={(e) => handleUseColorChange(e.target.checked)}
                                         style={{ color: '#e8e8e8' }}
                                     >
                                         <span style={{ color: '#e8e8e8' }}>使用颜色 (Use Color)</span>
                                     </Checkbox>
                                     <Checkbox
-                                        checked={selectedAnim.DropShadow}
-                                        onChange={handleDropShadowChange}
+                                        checked={geosetAnimDropsShadow(selectedAnim)}
+                                        onChange={(e) => handleDropShadowChange(e.target.checked)}
                                         style={{ color: '#e8e8e8' }}
                                     >
                                         <span style={{ color: '#e8e8e8' }}>阴影效果 (Drop Shadow)</span>

@@ -546,7 +546,12 @@ function generateColorProp(name: string, color: AnimVector | Float32Array, isSta
     return '';
 }
 
-function generateGeosetAnimColorProp(color: AnimVector | Float32Array): string {
+function generateGeosetAnimColorProp(geosetAnim: GeosetAnim): string {
+    const color = geosetAnim.Color;
+    if (!(geosetAnim.Flags & GeosetAnimFlags.Color)) {
+        return '';
+    }
+
     if (!color) {
         return '';
     }
@@ -566,7 +571,8 @@ function generateGeosetAnimChunk(geosetAnim: GeosetAnim): string {
     return generateBlockStart('GeosetAnim') +
         generateIntProp('GeosetId', geosetAnim.GeosetId) +
         generateAnimVectorProp('Alpha', geosetAnim.Alpha, 1) +
-        generateGeosetAnimColorProp(geosetAnim.Color) +
+        (geosetAnim.Flags & GeosetAnimFlags.Color ? generateBooleanProp('UseColor') : '') +
+        generateGeosetAnimColorProp(geosetAnim) +
         (geosetAnim.Flags & GeosetAnimFlags.DropShadow ? generateBooleanProp('DropShadow') : '') +
         generateBlockEnd();
 }

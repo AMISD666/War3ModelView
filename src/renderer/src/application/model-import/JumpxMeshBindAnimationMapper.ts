@@ -195,28 +195,20 @@ export const buildMeshBindNodeBoneIds = (geometries: JumpxGeometryDto[]): Set<nu
         if (stride <= 0 || geometry.skinWeightCounts.length < vertexCount || geometry.skinBoneIds.length < vertexCount * stride) {
             continue
         }
-        let hasMultiBoneVertex = false
         const usedBoneIds = new Set<number>()
         for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
             const count = Math.min(stride, Math.max(0, Math.floor(geometry.skinWeightCounts[vertexIndex] ?? 0)))
-            let usableCount = 0
             for (let weightIndex = 0; weightIndex < count; weightIndex += 1) {
                 const sourceIndex = vertexIndex * stride + weightIndex
                 const weight = Number(geometry.skinWeights[sourceIndex] ?? 0)
                 const boneId = Number(geometry.skinBoneIds[sourceIndex])
                 if (Number.isFinite(boneId) && weight > SCALE_EPSILON) {
                     usedBoneIds.add(boneId)
-                    usableCount += 1
                 }
             }
-            if (usableCount > 1) {
-                hasMultiBoneVertex = true
-            }
         }
-        if (hasMultiBoneVertex) {
-            for (const boneId of usedBoneIds) {
-                result.add(boneId)
-            }
+        for (const boneId of usedBoneIds) {
+            result.add(boneId)
         }
     }
     return result

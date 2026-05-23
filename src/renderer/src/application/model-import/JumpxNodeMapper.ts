@@ -32,6 +32,9 @@ const mappedParentObjectId = (
     return objectIdByBoneId.get(bone.parentId) ?? -1
 }
 
+const hasInverseBindMatrix = (bone: JumpxBoneDto): boolean =>
+    Array.isArray(bone.inverseBindMatrix) && bone.inverseBindMatrix.length === 16
+
 const createStaticRootHelper = (): ModelNode => ({
     type: NodeType.HELPER,
     Name: 'Imported_Root',
@@ -71,8 +74,8 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             type: NodeType.BONE,
             Name: uniqueBoneName(bone, objectId),
             ObjectId: objectId,
-            Parent: mappedParentObjectId(bone, objectIdByBoneId),
-            PivotPoint: bonePivotPoint(bone),
+            Parent: hasInverseBindMatrix(bone) ? -1 : mappedParentObjectId(bone, objectIdByBoneId),
+            PivotPoint: hasInverseBindMatrix(bone) ? [0, 0, 0] : bonePivotPoint(bone),
             Flags: DONT_INHERIT_ALL,
             DontInherit: { Translation: true, Rotation: true, Scaling: true },
             GeosetId: null,
@@ -86,7 +89,7 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             type: NodeType.BONE,
             Name: `${uniqueBoneName(bone, objectId)}_Mesh`,
             ObjectId: objectId,
-            Parent: mappedParentObjectId(bone, meshObjectIdByBoneId),
+            Parent: hasInverseBindMatrix(bone) ? -1 : mappedParentObjectId(bone, meshObjectIdByBoneId),
             PivotPoint: [0, 0, 0],
             Flags: DONT_INHERIT_ALL,
             DontInherit: { Translation: true, Rotation: true, Scaling: true },

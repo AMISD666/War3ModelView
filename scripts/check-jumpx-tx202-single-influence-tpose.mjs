@@ -446,6 +446,23 @@ const hasMultiBoneVertex = (geometry) => {
 
 const transformJumpxVec3 = ([x, y, z]) => [-y, x, z]
 
+const normalizeQuatForSynthetic = (value) => {
+    const length = Math.hypot(value[0] ?? 0, value[1] ?? 0, value[2] ?? 0, value[3] ?? 1)
+    if (!Number.isFinite(length) || length <= 1e-8) return [0, 0, 0, 1]
+    return value.map((item) => item / length)
+}
+
+const closeArray = (actual, expected, label, epsilon = 1e-5) => {
+    if (actual.length !== expected.length) {
+        fail(`${label} length mismatch: ${actual.length} vs ${expected.length}`)
+    }
+    actual.forEach((value, index) => {
+        if (Math.abs(value - expected[index]) > epsilon) {
+            fail(`${label}[${index}] mismatch: ${value} vs ${expected[index]}`)
+        }
+    })
+}
+
 const buildImportBundle = async () => {
     await esbuild.build({
         stdin: {
@@ -468,25 +485,28 @@ const buildImportBundle = async () => {
     })
 }
 
-const assertSourceHierarchy = (scene, nodeMapping, modelData) => {
+const assertJumpxWorldSpaceNodes = (scene, nodeMapping, modelData) => {
     const parentedBones = scene.bones.filter((bone) => bone.parentId >= 0)
     if (parentedBones.length < 6) {
         fail(`tx_202_s03 should contain parented bones, got ${parentedBones.length}`)
     }
     for (const sourceBone of parentedBones) {
         const objectId = nodeMapping.objectIdByBoneId.get(sourceBone.boneIndex)
-        const expectedParent = nodeMapping.objectIdByBoneId.get(sourceBone.parentId)
         const node = modelData.Bones?.find((item) => item.ObjectId === objectId)
-        if (node?.Parent !== expectedParent) {
-            fail(`${sourceBone.name} should preserve source parent ${sourceBone.parentId}->${expectedParent}, got ${node?.Parent}`)
+        if (node?.Parent !== -1) {
+            fail(`${sourceBone.name} should import as an independent JumpX world-space node, got parent ${node?.Parent}`)
+        }
+        closeArray(Array.from(node?.PivotPoint ?? []), [0, 0, 0], `${sourceBone.name} PivotPoint`)
+        if (((node?.Flags ?? 0) & 7) !== 7) {
+            fail(`${sourceBone.name} should disable inherited TRS, got Flags=${node?.Flags}`)
         }
 
         const meshObjectId = nodeMapping.meshObjectIdByBoneId.get(sourceBone.boneIndex)
-        const expectedMeshParent = nodeMapping.meshObjectIdByBoneId.get(sourceBone.parentId)
         const meshNode = modelData.Bones?.find((item) => item.ObjectId === meshObjectId)
-        if (meshNode?.Parent !== expectedMeshParent) {
-            fail(`${sourceBone.name}_Mesh should preserve source mesh parent ${sourceBone.parentId}->${expectedMeshParent}, got ${meshNode?.Parent}`)
+        if (meshNode?.Parent !== -1) {
+            fail(`${sourceBone.name}_Mesh should import as an independent inverse-bind node, got parent ${meshNode?.Parent}`)
         }
+        closeArray(Array.from(meshNode?.PivotPoint ?? []), [0, 0, 0], `${sourceBone.name}_Mesh PivotPoint`)
     }
 }
 
@@ -505,21 +525,206 @@ const assertSingleInfluenceMeshNode = (scene, modelData, nodeMapping, geometry, 
     const meshBone = modelData.Bones?.find((bone) => bone.ObjectId === meshObjectId)
     if (!sourceBone || !meshBone) fail(`Missing source/imported mesh bone for geoset ${geosetIndex}`)
 
-    const expectedFrame0 = transformJumpxVec3(sourceBone.positionKeys[0]?.value ?? sourceBone.worldTranslation)
+    const expectedFrame0 = [0, 0, 0]
     const actualFrame0 = Array.from(meshBone.Translation?.Keys?.find((key) => key.Frame === 0)?.Vector ?? [])
-    if (actualFrame0.length !== 3 || actualFrame0.some((value, axis) => Math.abs(value - expectedFrame0[axis]) > 1e-5)) {
-        fail(`single-influence *_Mesh frame 0 should keep absolute TRS ${JSON.stringify(expectedFrame0)}, got ${JSON.stringify(actualFrame0)}`)
+    if (actualFrame0.length > 0) {
+        closeArray(actualFrame0, expectedFrame0, `single-influence *_Mesh frame 0 translation for geoset ${geosetIndex}`)
     }
-    if (actualFrame0.every((value) => Math.abs(value) < 1e-7)) {
-        fail(`single-influence *_Mesh frame 0 was forced to identity translation for geoset ${geosetIndex}`)
+    const actualFrame0Rotation = Array.from(meshBone.Rotation?.Keys?.find((key) => key.Frame === 0)?.Vector ?? [])
+    if (actualFrame0Rotation.length > 0) {
+        closeArray(actualFrame0Rotation, [0, 0, 0, 1], `single-influence *_Mesh frame 0 rotation for geoset ${geosetIndex}`)
+    }
+    const actualFrame0Scaling = Array.from(meshBone.Scaling?.Keys?.find((key) => key.Frame === 0)?.Vector ?? [])
+    if (actualFrame0Scaling.length > 0) {
+        closeArray(actualFrame0Scaling, [1, 1, 1], `single-influence *_Mesh frame 0 scaling for geoset ${geosetIndex}`)
     }
 
     const firstImportedVertex = Array.from(geoset.Vertices ?? []).slice(0, 3)
     const firstSourceVertex = geometry.vertices.slice(0, 3)
     const sourceSpaceVertex = transformJumpxVec3(firstSourceVertex)
-    if (firstImportedVertex.every((value, axis) => Math.abs(value - sourceSpaceVertex[axis]) < 1e-5)) {
-        fail(`single-influence geoset ${geosetIndex} vertex stayed in raw source mesh space; expected inverse-bind prebake`)
+    closeArray(firstImportedVertex, sourceSpaceVertex, `single-influence geoset ${geosetIndex} bind-pose vertex`)
+}
+
+const assertSyntheticRotatedBindPose = (buildJumpxStaticModelData, applyJumpxAnimationTracks) => {
+    const rotation90Z = normalizeQuatForSynthetic([0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)])
+    const inverseBindMatrix = [
+        0, -1, 0, 0,
+        1, 0, 0, 0,
+        0, 0, 1, 0,
+        5, 7, 11, 1,
+    ]
+    const scene = {
+        probe: {
+            ok: true,
+            path: 'synthetic-rotated-bind.x',
+            fileSize: 0,
+            format: 'JumpX',
+            version: 8,
+            headSize: 0,
+            dataSize: 0,
+            headCompressedSize: 0,
+            dataCompressedSize: 0,
+            textureCount: 0,
+            materialCount: 0,
+            geometryCount: 1,
+            boneCount: 1,
+            boneGroupCount: 0,
+            attachmentCount: 0,
+            ribbonCount: 0,
+            particleCount: 0,
+            actionCount: 0,
+            warnings: [],
+        },
+        textures: [],
+        materials: [],
+        geometries: [{
+            geometryIndex: 0,
+            name: 'synthetic_rotated_bind',
+            materialId: 0,
+            geometryType: 0,
+            ancestorBoneId: 0,
+            vertexCount: 3,
+            indexCount: 3,
+            vertices: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+            normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+            uvs: [0, 0, 1, 0, 0, 1],
+            indices: [0, 1, 2],
+            skinWeightStride: 4,
+            skinWeightCounts: [1, 1, 1],
+            skinBoneIds: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            skinWeights: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+            minimumExtent: [0, 0, 0],
+            maximumExtent: [1, 1, 1],
+            boundsRadius: 1,
+            objectPivot: [0, 0, 0],
+            objectScale: [1, 1, 1],
+            inverseBindMatrix,
+            rawFlags: 64,
+            saveFlags: 64,
+        }],
+        bones: [{
+            boneIndex: 0,
+            name: 'SyntheticRotatedBind',
+            parentId: -1,
+            worldTranslation: [-7, 5, -11],
+            localTranslation: null,
+            inverseBindMatrix,
+            bindMatrix: null,
+            rawFlags: 1,
+            saveFlags: 0,
+            positionKeys: [{ frame: 320, timeMs: 1000, value: [-7, 5, -11], rawFlags: 0 }],
+            rotationKeys: [{ frame: 320, timeMs: 1000, value: [0, 0, 0, 1], rawFlags: 0 }],
+            scaleKeys: [],
+            visibilityKeys: [],
+        }],
+        boneGroups: [],
+        attachments: [],
+        ribbons: [],
+        particles: [],
+        actions: [],
     }
+    const { modelData, nodeMapping } = buildJumpxStaticModelData('synthetic-rotated-bind.x', scene)
+    applyJumpxAnimationTracks(scene, modelData, nodeMapping)
+    const geoset = modelData.Geosets?.[0]
+    if (!geoset) fail('synthetic rotated bind scene produced no geoset')
+    closeArray(Array.from(geoset.Vertices ?? []).slice(0, 3), [0, 1, 0], 'synthetic rotated bind-pose vertex')
+    const meshBone = modelData.Bones?.find((bone) => bone.ObjectId === nodeMapping.meshObjectIdByBoneId.get(0))
+    if (!meshBone) fail('synthetic rotated bind scene produced no mesh bone')
+    closeArray(Array.from(meshBone.Translation?.Keys?.find((key) => key.Frame === 0)?.Vector ?? []), [0, 0, 0], 'synthetic mesh rest translation')
+    closeArray(Array.from(meshBone.Rotation?.Keys?.find((key) => key.Frame === 0)?.Vector ?? []), [0, 0, 0, 1], 'synthetic mesh rest rotation')
+    closeArray(Array.from(meshBone.Scaling?.Keys?.find((key) => key.Frame === 0)?.Vector ?? []), [1, 1, 1], 'synthetic mesh rest scaling')
+    const animatedRotation = Array.from(meshBone.Rotation?.Keys?.find((key) => key.Frame === 1000)?.Vector ?? [])
+    const rotationMagnitude = Math.hypot(animatedRotation[0] ?? 0, animatedRotation[1] ?? 0, animatedRotation[2] ?? 0)
+    if (rotationMagnitude <= 1e-4) {
+        fail(`synthetic mesh animated inverse-bind rotation was lost: ${JSON.stringify(animatedRotation)}`)
+    }
+}
+
+const assertSyntheticObjectScaleDoesNotInflateBindPose = (buildJumpxStaticModelData) => {
+    const scene = {
+        probe: {
+            ok: true,
+            path: 'synthetic-scaled-bind.x',
+            fileSize: 0,
+            format: 'JumpX',
+            version: 8,
+            headSize: 0,
+            dataSize: 0,
+            headCompressedSize: 0,
+            dataCompressedSize: 0,
+            textureCount: 0,
+            materialCount: 0,
+            geometryCount: 1,
+            boneCount: 1,
+            boneGroupCount: 0,
+            attachmentCount: 0,
+            ribbonCount: 0,
+            particleCount: 0,
+            actionCount: 0,
+            warnings: [],
+        },
+        textures: [],
+        materials: [],
+        geometries: [{
+            geometryIndex: 0,
+            name: 'synthetic_scaled_bind',
+            materialId: 0,
+            geometryType: 0,
+            ancestorBoneId: 0,
+            vertexCount: 3,
+            indexCount: 3,
+            vertices: [2, 3, 4, 0, 1, 0, 0, 0, 1],
+            normals: [0, 0, 1, 0, 0, 1, 0, 0, 1],
+            uvs: [0, 0, 1, 0, 0, 1],
+            indices: [0, 1, 2],
+            skinWeightStride: 4,
+            skinWeightCounts: [1, 1, 1],
+            skinBoneIds: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            skinWeights: [1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0],
+            minimumExtent: [0, 0, 0],
+            maximumExtent: [2, 3, 4],
+            boundsRadius: 3,
+            objectPivot: [100, 200, 300],
+            objectScale: [25, 40, 60],
+            inverseBindMatrix: [
+                25, 0, 0, 0,
+                0, 40, 0, 0,
+                0, 0, 60, 0,
+                0, 0, 0, 1,
+            ],
+            rawFlags: 64,
+            saveFlags: 64,
+        }],
+        bones: [{
+            boneIndex: 0,
+            name: 'SyntheticScaledBind',
+            parentId: -1,
+            worldTranslation: [0, 0, 0],
+            localTranslation: null,
+            inverseBindMatrix: [
+                25, 0, 0, 0,
+                0, 40, 0, 0,
+                0, 0, 60, 0,
+                0, 0, 0, 1,
+            ],
+            bindMatrix: null,
+            rawFlags: 1,
+            saveFlags: 0,
+            positionKeys: [],
+            rotationKeys: [],
+            scaleKeys: [],
+            visibilityKeys: [],
+        }],
+        boneGroups: [],
+        attachments: [],
+        ribbons: [],
+        particles: [],
+        actions: [],
+    }
+    const { modelData } = buildJumpxStaticModelData('synthetic-scaled-bind.x', scene)
+    const geoset = modelData.Geosets?.[0]
+    if (!geoset) fail('synthetic scaled bind scene produced no geoset')
+    closeArray(Array.from(geoset.Vertices ?? []).slice(0, 3), [-3, 2, 4], 'synthetic scaled bind-pose vertex')
 }
 
 const main = async () => {
@@ -546,12 +751,14 @@ const main = async () => {
     } = await import(pathToFileURL(bundlePath).href)
 
     const meshBindBoneIds = buildMeshBindNodeBoneIds(scene.geometries)
-    if (meshBindBoneIds.size !== 0) {
-        fail(`single-influence tx_202_s03 should not use mesh-bind animation bones, got ${JSON.stringify(Array.from(meshBindBoneIds))}`)
+    if (meshBindBoneIds.size === 0) {
+        fail('single-influence tx_202_s03 must use mesh-bind animation bones when inverse bind matrices are available')
     }
 
     const { modelData, nodeMapping } = buildJumpxStaticModelData(fixturePath, scene)
     applyJumpxAnimationTracks(scene, modelData, nodeMapping)
+    assertSyntheticRotatedBindPose(buildJumpxStaticModelData, applyJumpxAnimationTracks)
+    assertSyntheticObjectScaleDoesNotInflateBindPose(buildJumpxStaticModelData)
     if (modelData.Version?.FormatVersion !== 800) {
         fail(`JumpX single-influence import must stay MDX 800, got ${modelData.Version?.FormatVersion}`)
     }
@@ -562,7 +769,7 @@ const main = async () => {
     for (let geosetIndex = 0; geosetIndex < scene.geometries.length; geosetIndex += 1) {
         assertSingleInfluenceMeshNode(scene, modelData, nodeMapping, scene.geometries[geosetIndex], geosetIndex)
     }
-    assertSourceHierarchy(scene, nodeMapping, modelData)
+    assertJumpxWorldSpaceNodes(scene, nodeMapping, modelData)
 
     const generatedMdx = generateMDX(prepareModelDataForSave(modelData))
     const roundTripBuffer = generatedMdx instanceof ArrayBuffer

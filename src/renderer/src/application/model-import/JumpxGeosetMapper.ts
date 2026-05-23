@@ -7,7 +7,6 @@ import {
     rotateExtentsAroundX,
     rotateFlatVec3ArrayAroundX,
     scaleJumpxFlatVec3ArrayAroundPivot,
-    transformJumpxMat4,
     transformJumpxExtents,
     transformJumpxFlatVec3Array,
     transformJumpxVec3,
@@ -30,67 +29,6 @@ const JUMPX_CLASSIC_DOMINANT_SINGLE_WEIGHT = 0.65
 const JUMPX_CLASSIC_DOMINANT_SINGLE_MARGIN = 0.35
 const JUMPX_MESH_PLANE_ROTATION_RADIANS = 0
 
-const transformPoint = (matrix: ArrayLike<number>, point: [number, number, number]): [number, number, number] => {
-    const x = point[0]
-    const y = point[1]
-    const z = point[2]
-    return [
-        matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
-        matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
-        matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14],
-    ]
-}
-
-const transformVector = (matrix: ArrayLike<number>, point: [number, number, number]): [number, number, number] => {
-    const x = point[0]
-    const y = point[1]
-    const z = point[2]
-    return [
-        matrix[0] * x + matrix[4] * y + matrix[8] * z,
-        matrix[1] * x + matrix[5] * y + matrix[9] * z,
-        matrix[2] * x + matrix[6] * y + matrix[10] * z,
-    ]
-}
-
-const normalize = (value: [number, number, number]): [number, number, number] => {
-    const length = Math.hypot(value[0], value[1], value[2])
-    if (!Number.isFinite(length) || length <= 1e-8) return [0, 0, 1]
-    return [value[0] / length, value[1] / length, value[2] / length]
-}
-
-const transformFlatVec3ArrayByMatrix = (
-    values: ArrayLike<number>,
-    matrix: ArrayLike<number>,
-    asVector = false,
-): Float32Array => {
-    const out = new Float32Array(values.length)
-    for (let index = 0; index + 2 < values.length; index += 3) {
-        const transformed = asVector
-            ? normalize(transformVector(matrix, [Number(values[index]), Number(values[index + 1]), Number(values[index + 2])]))
-            : transformPoint(matrix, [Number(values[index]), Number(values[index + 1]), Number(values[index + 2])])
-        out[index] = transformed[0]
-        out[index + 1] = transformed[1]
-        out[index + 2] = transformed[2]
-    }
-    return out
-}
-
-const extentsFromFlatVertices = (values: ArrayLike<number>): { min: [number, number, number]; max: [number, number, number] } => {
-    const min: [number, number, number] = [Infinity, Infinity, Infinity]
-    const max: [number, number, number] = [-Infinity, -Infinity, -Infinity]
-    for (let index = 0; index + 2 < values.length; index += 3) {
-        for (let axis = 0; axis < 3; axis += 1) {
-            const value = Number(values[index + axis])
-            min[axis] = Math.min(min[axis], value)
-            max[axis] = Math.max(max[axis], value)
-        }
-    }
-    if (!min.every(Number.isFinite) || !max.every(Number.isFinite)) {
-        return { min: [0, 0, 0], max: [0, 0, 0] }
-    }
-    return { min, max }
-}
-
 const radiusFromExtents = (min: [number, number, number], max: [number, number, number]): number =>
     Math.hypot(max[0] - min[0], max[1] - min[1], max[2] - min[2]) / 2
 
@@ -98,12 +36,6 @@ const shouldUseMeshOnlyBindNode = (geometry: JumpxGeometryDto): boolean =>
     Array.isArray(geometry.inverseBindMatrix)
     && geometry.inverseBindMatrix.length === 16
     && geometry.ancestorBoneId >= 0
-
-const hasMultiBonePalette = (geometry: JumpxGeometryDto): boolean =>
-    (geometry.skinWeightCounts ?? []).some((count) => Math.max(0, Math.floor(count ?? 0)) > 1)
-
-const usesMeshOnlyBindPath = (geometry: JumpxGeometryDto): boolean =>
-    shouldUseMeshOnlyBindNode(geometry) && !hasMultiBonePalette(geometry)
 
 const warning = (category: JumpxImportDiagnostic['category'], message: string): JumpxImportDiagnostic => ({
     severity: 'warning',
@@ -170,7 +102,7 @@ const buildClassicGroups = (
             ? (nodeMapping.meshObjectIdByBoneId?.get(boneId) ?? nodeMapping.objectIdByBoneId.get(boneId))
             : nodeMapping.objectIdByBoneId.get(boneId)
     const bakedObjectId = meshObjectId(geometry.skinBoneIds[0]) ?? nodeMapping.defaultObjectId
-    if (geometry.objectScale.some((value) => Math.abs(value - 1) > 1e-6)) {
+    if (!useMeshBindNodes && geometry.objectScale.some((value) => Math.abs(value - 1) > 1e-6)) {
         return { vertexGroup: new Uint8Array(vertexCount), groups: [[bakedObjectId]] }
     }
 
@@ -248,38 +180,30 @@ const buildGeoset = (
     const uvs = geometry.uvs.length === vertexCount * 2
         ? geometry.uvs
         : new Array(vertexCount * 2).fill(0)
-    const inverseBindMatrix = usesMeshOnlyBindPath(geometry) ? geometry.inverseBindMatrix : null
-    const bindMatrix = inverseBindMatrix
-        ? transformJumpxMat4(inverseBindMatrix)
-        : null
-    const sourceVertices = bindMatrix ? transformJumpxFlatVec3Array(geometry.vertices) : geometry.vertices
-    const sourceNormals = bindMatrix ? transformJumpxFlatVec3Array(normals) : normals
-    const scaledVertices = bindMatrix
-        ? transformFlatVec3ArrayByMatrix(sourceVertices, bindMatrix)
+    const useMeshBindNodes = shouldUseMeshOnlyBindNode(geometry)
+    const scaledVertices = useMeshBindNodes
+        ? geometry.vertices
         : scaleJumpxFlatVec3ArrayAroundPivot(
             geometry.vertices,
             geometry.objectPivot,
             geometry.objectScale,
         )
-    const transformedVertices = bindMatrix ? scaledVertices : transformJumpxFlatVec3Array(scaledVertices)
-    const transformedNormals = bindMatrix
-        ? transformFlatVec3ArrayByMatrix(sourceNormals, bindMatrix, true)
-        : transformJumpxFlatVec3Array(normals)
+    const transformedVertices = transformJumpxFlatVec3Array(scaledVertices)
+    const transformedNormals = transformJumpxFlatVec3Array(normals)
     const pivot = transformJumpxVec3(geometry.objectPivot)
-    const transformedExtents = bindMatrix
-        ? extentsFromFlatVertices(transformedVertices)
-        : transformJumpxExtents(
-            [
-                geometry.objectPivot[0] + (geometry.minimumExtent[0] - geometry.objectPivot[0]) * geometry.objectScale[0],
-                geometry.objectPivot[1] + (geometry.minimumExtent[1] - geometry.objectPivot[1]) * geometry.objectScale[1],
-                geometry.objectPivot[2] + (geometry.minimumExtent[2] - geometry.objectPivot[2]) * geometry.objectScale[2],
-            ],
-            [
-                geometry.objectPivot[0] + (geometry.maximumExtent[0] - geometry.objectPivot[0]) * geometry.objectScale[0],
-                geometry.objectPivot[1] + (geometry.maximumExtent[1] - geometry.objectPivot[1]) * geometry.objectScale[1],
-                geometry.objectPivot[2] + (geometry.maximumExtent[2] - geometry.objectPivot[2]) * geometry.objectScale[2],
-            ],
-        )
+    const extentScale = useMeshBindNodes ? [1, 1, 1] : geometry.objectScale
+    const transformedExtents = transformJumpxExtents(
+        [
+            geometry.objectPivot[0] + (geometry.minimumExtent[0] - geometry.objectPivot[0]) * extentScale[0],
+            geometry.objectPivot[1] + (geometry.minimumExtent[1] - geometry.objectPivot[1]) * extentScale[1],
+            geometry.objectPivot[2] + (geometry.minimumExtent[2] - geometry.objectPivot[2]) * extentScale[2],
+        ],
+        [
+            geometry.objectPivot[0] + (geometry.maximumExtent[0] - geometry.objectPivot[0]) * extentScale[0],
+            geometry.objectPivot[1] + (geometry.maximumExtent[1] - geometry.objectPivot[1]) * extentScale[1],
+            geometry.objectPivot[2] + (geometry.maximumExtent[2] - geometry.objectPivot[2]) * extentScale[2],
+        ],
+    )
     const extents = rotateExtentsAroundX(
         transformedExtents.min,
         transformedExtents.max,

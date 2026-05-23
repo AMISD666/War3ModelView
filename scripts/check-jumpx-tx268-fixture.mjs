@@ -705,13 +705,6 @@ const buildImportBundle = async () => {
     })
 }
 
-const assertRendererSupportsDontInheritScaling = () => {
-    const source = fs.readFileSync(path.join(repoRoot, 'vendor', 'war3-model', 'renderer', 'modelInstance.ts'), 'utf8')
-    if (!source.includes('dontInheritScaling && !dontInheritTranslation && !dontInheritRotation')) {
-        fail('Renderer must support standalone DontInheritScaling for JumpX parent-scale isolation')
-    }
-}
-
 const trackSummary = (track) => ({
     count: track?.Keys?.length ?? 0,
     firstFrame: track?.Keys?.[0]?.Frame,
@@ -792,7 +785,6 @@ const assertRotationTrackMatchesSourceSpeed = (sourceBone, importedBone) => {
 }
 
 const main = async () => {
-    assertRendererSupportsDontInheritScaling()
     const scene = buildScene()
     await buildImportBundle()
     const { buildJumpxStaticModelData, applyJumpxAnimationTracks, prepareModelDataForSave } = await import(pathToFileURL(bundlePath).href)

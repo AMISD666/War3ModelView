@@ -97,15 +97,19 @@ const computeCombinedExtents = (scene: JumpxStaticSceneResult): Extents => {
     const max: [number, number, number] = [-Infinity, -Infinity, -Infinity]
     let radius = 0
     for (const geometry of scene.geometries) {
+        const useMeshBindNodes = Array.isArray(geometry.inverseBindMatrix)
+            && geometry.inverseBindMatrix.length === 16
+            && geometry.ancestorBoneId >= 0
+        const scale = useMeshBindNodes ? [1, 1, 1] : geometry.objectScale
         const scaledMin: [number, number, number] = [
-            geometry.objectPivot[0] + (geometry.minimumExtent[0] - geometry.objectPivot[0]) * geometry.objectScale[0],
-            geometry.objectPivot[1] + (geometry.minimumExtent[1] - geometry.objectPivot[1]) * geometry.objectScale[1],
-            geometry.objectPivot[2] + (geometry.minimumExtent[2] - geometry.objectPivot[2]) * geometry.objectScale[2],
+            geometry.objectPivot[0] + (geometry.minimumExtent[0] - geometry.objectPivot[0]) * scale[0],
+            geometry.objectPivot[1] + (geometry.minimumExtent[1] - geometry.objectPivot[1]) * scale[1],
+            geometry.objectPivot[2] + (geometry.minimumExtent[2] - geometry.objectPivot[2]) * scale[2],
         ]
         const scaledMax: [number, number, number] = [
-            geometry.objectPivot[0] + (geometry.maximumExtent[0] - geometry.objectPivot[0]) * geometry.objectScale[0],
-            geometry.objectPivot[1] + (geometry.maximumExtent[1] - geometry.objectPivot[1]) * geometry.objectScale[1],
-            geometry.objectPivot[2] + (geometry.maximumExtent[2] - geometry.objectPivot[2]) * geometry.objectScale[2],
+            geometry.objectPivot[0] + (geometry.maximumExtent[0] - geometry.objectPivot[0]) * scale[0],
+            geometry.objectPivot[1] + (geometry.maximumExtent[1] - geometry.objectPivot[1]) * scale[1],
+            geometry.objectPivot[2] + (geometry.maximumExtent[2] - geometry.objectPivot[2]) * scale[2],
         ]
         for (let axis = 0; axis < 3; axis += 1) {
             min[axis] = Math.min(min[axis], scaledMin[axis])

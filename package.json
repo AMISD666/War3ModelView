@@ -21,6 +21,7 @@
     "check:geoset-delete-preserves-bones": "node scripts/check-geoset-delete-preserves-bones.mjs",
     "check:geoset-material-jump": "node scripts/check-geoset-material-jump.mjs",
     "check:geoset-animation-selection-preserve": "node scripts/check-geoset-animation-selection-preserve.mjs",
+    "check:geoset-animation-color-flag": "node scripts/check-geoset-animation-color-flag.mjs",
     "check:node-dynamic-track-removal": "node scripts/check-node-dynamic-track-removal.mjs",
     "check:node-preview-object-id-zero": "node scripts/check-node-preview-object-id-zero.mjs",
     "check:pe2-tail-render-normalization": "node scripts/check-pe2-tail-render-normalization.mjs",
