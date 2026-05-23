@@ -37,6 +37,7 @@ const RENDER_MODULATE = 0x80000
 const RENDER_MODULATE2X = 0x100000
 
 const PE2_NODE_TYPE = 0x1000
+const DONT_INHERIT_TRANSLATION = 0x1
 const DONT_INHERIT_SCALING = 0x4
 const DONT_INHERIT_ROTATION = 0x2
 const PE2_UNSHADED = 0x8000
@@ -442,8 +443,8 @@ export const mapJumpxParticlesToParticleEmitter2 = (
         ObjectId: firstObjectId + index,
         Parent: mapParent(particle, nodeMapping),
         PivotPoint: particlePivotPoint(particle, bonesByIndex),
-        Flags: flags | DONT_INHERIT_ROTATION,
-        DontInherit: { Rotation: true, Scaling: true },
+        Flags: flags | DONT_INHERIT_TRANSLATION | DONT_INHERIT_ROTATION,
+        DontInherit: { Translation: true, Rotation: true, Scaling: true },
         EmissionRate: emissionRate ?? finite(particle.emissionRate, 0),
         Speed: finite(particle.speed, 0),
         Variation: mapVariation(particle.speedVariation),

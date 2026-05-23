@@ -164,9 +164,9 @@ const buildClassicGroups = (
     nodeMapping: JumpxNodeMappingForGeosets,
     diagnostics: JumpxImportDiagnostic[],
 ): { vertexGroup: Uint8Array | Uint16Array; groups: number[][] } => {
-    const useMeshOnlyBindNode = usesMeshOnlyBindPath(geometry)
+    const useMeshBindNodes = shouldUseMeshOnlyBindNode(geometry)
     const meshObjectId = (boneId: number): number | undefined =>
-        useMeshOnlyBindNode
+        useMeshBindNodes
             ? (nodeMapping.meshObjectIdByBoneId?.get(boneId) ?? nodeMapping.objectIdByBoneId.get(boneId))
             : nodeMapping.objectIdByBoneId.get(boneId)
     const bakedObjectId = meshObjectId(geometry.skinBoneIds[0]) ?? nodeMapping.defaultObjectId

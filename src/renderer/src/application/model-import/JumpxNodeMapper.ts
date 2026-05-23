@@ -22,6 +22,16 @@ const uniqueBoneName = (bone: JumpxBoneDto, objectId: number): string => {
 const bonePivotPoint = (bone: JumpxBoneDto): [number, number, number] =>
     transformJumpxVec3(bone.worldTranslation)
 
+const mappedParentObjectId = (
+    bone: JumpxBoneDto,
+    objectIdByBoneId: Map<number, number>,
+): number => {
+    if (bone.parentId < 0) {
+        return -1
+    }
+    return objectIdByBoneId.get(bone.parentId) ?? -1
+}
+
 const createStaticRootHelper = (): ModelNode => ({
     type: NodeType.HELPER,
     Name: 'Imported_Root',
@@ -61,7 +71,7 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             type: NodeType.BONE,
             Name: uniqueBoneName(bone, objectId),
             ObjectId: objectId,
-            Parent: -1,
+            Parent: mappedParentObjectId(bone, objectIdByBoneId),
             PivotPoint: bonePivotPoint(bone),
             Flags: DONT_INHERIT_ALL,
             DontInherit: { Translation: true, Rotation: true, Scaling: true },
@@ -76,7 +86,7 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             type: NodeType.BONE,
             Name: `${uniqueBoneName(bone, objectId)}_Mesh`,
             ObjectId: objectId,
-            Parent: -1,
+            Parent: mappedParentObjectId(bone, meshObjectIdByBoneId),
             PivotPoint: [0, 0, 0],
             Flags: DONT_INHERIT_ALL,
             DontInherit: { Translation: true, Rotation: true, Scaling: true },

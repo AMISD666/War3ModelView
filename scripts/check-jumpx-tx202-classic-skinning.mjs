@@ -311,6 +311,7 @@ const buildImportBundle = async () => {
         stdin: {
             contents: [
                 "export { buildJumpxStaticModelData } from './src/renderer/src/application/model-import/JumpxModelBuilder.ts'",
+                "export { applyJumpxAnimationTracks } from './src/renderer/src/application/model-import/JumpxAnimationMapper.ts'",
                 "export { chooseClassicInfluencesForJumpxWeights } from './src/renderer/src/application/model-import/JumpxGeosetMapper.ts'",
                 "export { prepareModelDataForSave } from './src/renderer/src/application/model-save/prepareModelDataForSave.ts'",
             ].join('\n'),
@@ -344,6 +345,7 @@ const main = async () => {
     const samples = findFixtureSamples()
     await buildImportBundle()
     const {
+        applyJumpxAnimationTracks,
         buildJumpxStaticModelData,
         chooseClassicInfluencesForJumpxWeights,
         prepareModelDataForSave,
@@ -367,6 +369,7 @@ const main = async () => {
 
     const scene = buildSyntheticScene(samples)
     const { modelData, nodeMapping } = buildJumpxStaticModelData(fixturePath, scene)
+    applyJumpxAnimationTracks(scene, modelData, nodeMapping)
     if (modelData.Version?.FormatVersion !== 800) {
         fail(`JumpX classic import must stay MDX 800, got ${modelData.Version?.FormatVersion}`)
     }
@@ -384,9 +387,15 @@ const main = async () => {
     if (dominantObjectId === undefined || balancedObjectIds.some((value) => value === undefined) || singleObjectId === undefined) {
         fail('Missing synthetic node mapping for tx_202 sampled bones')
     }
-    assertGroup(geoset, 0, [dominantObjectId], 'dominant tx_202 wing vertex')
-    assertGroup(geoset, 1, balancedObjectIds, 'balanced tx_202 wing vertex')
-    assertGroup(geoset, 2, [singleObjectId], 'single tx_202 wing vertex')
+    const dominantMeshObjectId = nodeMapping.meshObjectIdByBoneId.get(samples.dominant[0].boneId)
+    const balancedMeshObjectIds = samples.balanced.map((item) => nodeMapping.meshObjectIdByBoneId.get(item.boneId))
+    const singleMeshObjectId = nodeMapping.meshObjectIdByBoneId.get(samples.single[0].boneId)
+    if (dominantMeshObjectId === undefined || balancedMeshObjectIds.some((value) => value === undefined) || singleMeshObjectId === undefined) {
+        fail('Missing synthetic mesh-node mapping for tx_202 sampled bones')
+    }
+    assertGroup(geoset, 0, [dominantMeshObjectId], 'dominant tx_202 wing vertex')
+    assertGroup(geoset, 1, balancedMeshObjectIds, 'balanced tx_202 wing vertex')
+    assertGroup(geoset, 2, [singleMeshObjectId], 'single tx_202 wing vertex')
 
     const dominantBone = modelData.Bones?.find((bone) => bone.ObjectId === dominantObjectId)
     const sourceDominantBone = scene.bones.find((bone) => bone.boneIndex === samples.dominant[0].boneId)
@@ -402,11 +411,24 @@ const main = async () => {
     if (actualTranslation.some((value, index) => Math.abs(value - expectedTranslation[index]) > 1e-6)) {
         fail(`Dominant tx_202 bone translation should be key minus pivot ${JSON.stringify(expectedTranslation)}, got ${JSON.stringify(actualTranslation)}`)
     }
-    const meshObjectId = nodeMapping.meshObjectIdByBoneId.get(samples.dominant[0].boneId)
-    const meshBone = modelData.Bones?.find((bone) => bone.ObjectId === meshObjectId)
+    const meshBone = modelData.Bones?.find((bone) => bone.ObjectId === dominantMeshObjectId)
     const meshPivot = Array.from(meshBone?.PivotPoint ?? [])
     if (meshPivot.some((value) => Math.abs(value) > 1e-7)) {
         fail(`JumpX *_Mesh helper bone should keep origin pivot for inverse-bind path, got ${JSON.stringify(meshPivot)}`)
+    }
+    const meshRestTranslation = Array.from(meshBone?.Translation?.Keys?.find((key) => key.Frame === 0)?.Vector ?? [])
+    const meshRestRotation = Array.from(meshBone?.Rotation?.Keys?.find((key) => key.Frame === 0)?.Vector ?? [])
+    const meshRestScaling = Array.from(meshBone?.Scaling?.Keys?.find((key) => key.Frame === 0)?.Vector ?? [])
+    if (
+        JSON.stringify(meshRestTranslation) !== JSON.stringify([0, 0, 0])
+        || JSON.stringify(meshRestRotation) !== JSON.stringify([0, 0, 0, 1])
+        || JSON.stringify(meshRestScaling) !== JSON.stringify([1, 1, 1])
+    ) {
+        fail(`JumpX *_Mesh helper bone must keep identity T-pose keys, got T=${JSON.stringify(meshRestTranslation)} R=${JSON.stringify(meshRestRotation)} S=${JSON.stringify(meshRestScaling)}`)
+    }
+    const meshAnimatedTranslation = Array.from(meshBone?.Translation?.Keys?.find((key) => key.Frame === 1000)?.Vector ?? [])
+    if (meshAnimatedTranslation.length !== 3 || meshAnimatedTranslation.every((value) => Math.abs(value) < 1e-7)) {
+        fail(`JumpX *_Mesh helper bone should carry animated TRS*inverseBind keys after T-pose, got ${JSON.stringify(meshAnimatedTranslation)}`)
     }
 
     const generatedMdx = generateMDX(prepareModelDataForSave(modelData))

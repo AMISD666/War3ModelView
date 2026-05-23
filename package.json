@@ -13,6 +13,7 @@
     "check:material-render-state": "node scripts/check-material-render-state.mjs",
     "check:jumpx-material-flags": "node scripts/check-jumpx-material-flags.mjs",
     "check:jumpx-tx202-classic-skinning": "node scripts/check-jumpx-tx202-classic-skinning.mjs",
+    "check:jumpx-tx202-single-influence-tpose": "node scripts/check-jumpx-tx202-single-influence-tpose.mjs",
     "check:jumpx-pe2-width-length": "node scripts/check-jumpx-pe2-width-length.mjs",
     "check:geoset-buffer-rebuild": "node scripts/check-geoset-buffer-rebuild.mjs",
     "check:delete-geometry-compaction": "node scripts/check-delete-geometry-compaction.mjs",
