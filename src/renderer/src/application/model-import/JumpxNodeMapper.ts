@@ -1,5 +1,6 @@
 import type { JumpxBoneDto, JumpxStaticSceneResult } from '../../types/jumpxImport'
 import { NodeType, type ModelNode } from '../../types/node'
+import { transformJumpxVec3 } from './JumpxCoordinateTransform'
 
 const DONT_INHERIT_ALL = 1 | 2 | 4
 
@@ -17,6 +18,9 @@ const uniqueBoneName = (bone: JumpxBoneDto, objectId: number): string => {
     const trimmed = bone.name.trim()
     return trimmed.length > 0 ? trimmed : `JumpX_Bone_${objectId}`
 }
+
+const bonePivotPoint = (bone: JumpxBoneDto): [number, number, number] =>
+    transformJumpxVec3(bone.worldTranslation)
 
 const createStaticRootHelper = (): ModelNode => ({
     type: NodeType.HELPER,
@@ -58,7 +62,7 @@ export const buildJumpxNodeMapping = (scene: JumpxStaticSceneResult): JumpxNodeM
             Name: uniqueBoneName(bone, objectId),
             ObjectId: objectId,
             Parent: -1,
-            PivotPoint: [0, 0, 0],
+            PivotPoint: bonePivotPoint(bone),
             Flags: DONT_INHERIT_ALL,
             DontInherit: { Translation: true, Rotation: true, Scaling: true },
             GeosetId: null,

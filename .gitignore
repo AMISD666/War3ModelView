@@ -79,6 +79,7 @@ scripts/*
 !scripts/check-keyframe-transform-tangents.mjs
 !scripts/check-jumpx-pe2-width-length.mjs
 !scripts/check-jumpx-tx202-particle-direction.mjs
+!scripts/check-jumpx-tx202-classic-skinning.mjs
 !scripts/check-jumpx-tx268-fixture.mjs
 !scripts/check-jumpx-mesh-bind-matrix.mjs
 !scripts/check-geoset-buffer-rebuild.mjs

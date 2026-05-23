@@ -19,13 +19,15 @@ export type JumpxNodeMappingForGeosets = {
     meshObjectIdByBoneId?: Map<number, number>
 }
 
-type ClassicInfluence = {
+export type JumpxClassicInfluence = {
     objectId: number
     weight: number
 }
 
 const MAX_CLASSIC_MATRIX_INFLUENCES = 4
 const CLASSIC_WEIGHT_ERROR_EPSILON = 1e-9
+const JUMPX_CLASSIC_DOMINANT_SINGLE_WEIGHT = 0.65
+const JUMPX_CLASSIC_DOMINANT_SINGLE_MARGIN = 0.35
 const JUMPX_MESH_PLANE_ROTATION_RADIANS = 0
 
 const transformPoint = (matrix: ArrayLike<number>, point: [number, number, number]): [number, number, number] => {
@@ -97,13 +99,19 @@ const shouldUseMeshOnlyBindNode = (geometry: JumpxGeometryDto): boolean =>
     && geometry.inverseBindMatrix.length === 16
     && geometry.ancestorBoneId >= 0
 
+const hasMultiBonePalette = (geometry: JumpxGeometryDto): boolean =>
+    (geometry.skinWeightCounts ?? []).some((count) => Math.max(0, Math.floor(count ?? 0)) > 1)
+
+const usesMeshOnlyBindPath = (geometry: JumpxGeometryDto): boolean =>
+    shouldUseMeshOnlyBindNode(geometry) && !hasMultiBonePalette(geometry)
+
 const warning = (category: JumpxImportDiagnostic['category'], message: string): JumpxImportDiagnostic => ({
     severity: 'warning',
     category,
     message,
 })
 
-const chooseClassicInfluences = (influences: ClassicInfluence[]): ClassicInfluence[] => {
+export const chooseClassicInfluencesForJumpxWeights = (influences: JumpxClassicInfluence[]): JumpxClassicInfluence[] => {
     const mergedByObjectId = new Map<number, number>()
     for (const influence of influences) {
         if (!Number.isFinite(influence.objectId) || !Number.isFinite(influence.weight) || influence.weight <= 0) {
@@ -124,6 +132,15 @@ const chooseClassicInfluences = (influences: ClassicInfluence[]): ClassicInfluen
     }
 
     const normalized = sorted.map((item) => ({ objectId: item.objectId, weight: item.weight / total }))
+    const strongestWeight = normalized[0]?.weight ?? 0
+    const secondWeight = normalized[1]?.weight ?? 0
+    if (
+        strongestWeight >= JUMPX_CLASSIC_DOMINANT_SINGLE_WEIGHT
+        && strongestWeight - secondWeight >= JUMPX_CLASSIC_DOMINANT_SINGLE_MARGIN
+    ) {
+        return normalized.slice(0, 1)
+    }
+
     let bestCount = 1
     let bestError = Number.POSITIVE_INFINITY
     for (let count = 1; count <= Math.min(MAX_CLASSIC_MATRIX_INFLUENCES, normalized.length); count += 1) {
@@ -147,7 +164,7 @@ const buildClassicGroups = (
     nodeMapping: JumpxNodeMappingForGeosets,
     diagnostics: JumpxImportDiagnostic[],
 ): { vertexGroup: Uint8Array | Uint16Array; groups: number[][] } => {
-    const useMeshOnlyBindNode = shouldUseMeshOnlyBindNode(geometry)
+    const useMeshOnlyBindNode = usesMeshOnlyBindPath(geometry)
     const meshObjectId = (boneId: number): number | undefined =>
         useMeshOnlyBindNode
             ? (nodeMapping.meshObjectIdByBoneId?.get(boneId) ?? nodeMapping.objectIdByBoneId.get(boneId))
@@ -174,7 +191,7 @@ const buildClassicGroups = (
 
     for (let vertexIndex = 0; vertexIndex < vertexCount; vertexIndex += 1) {
         const influenceCount = Math.min(stride, Math.max(0, Math.floor(geometry.skinWeightCounts[vertexIndex] ?? 0)))
-        const influences: ClassicInfluence[] = []
+        const influences: JumpxClassicInfluence[] = []
         for (let weightIndex = 0; weightIndex < influenceCount; weightIndex += 1) {
             const sourceIndex = vertexIndex * stride + weightIndex
             const objectId = meshObjectId(geometry.skinBoneIds[sourceIndex])
@@ -186,7 +203,7 @@ const buildClassicGroups = (
         }
 
         const resolved = influences.length > 0
-            ? chooseClassicInfluences(influences)
+            ? chooseClassicInfluencesForJumpxWeights(influences)
             : [{ objectId: nodeMapping.defaultObjectId, weight: 1 }]
         if (influences.length === 0) {
             fallbackVertices += 1
@@ -231,7 +248,7 @@ const buildGeoset = (
     const uvs = geometry.uvs.length === vertexCount * 2
         ? geometry.uvs
         : new Array(vertexCount * 2).fill(0)
-    const inverseBindMatrix = shouldUseMeshOnlyBindNode(geometry) ? geometry.inverseBindMatrix : null
+    const inverseBindMatrix = usesMeshOnlyBindPath(geometry) ? geometry.inverseBindMatrix : null
     const bindMatrix = inverseBindMatrix
         ? transformJumpxMat4(inverseBindMatrix)
         : null
